@@ -1,0 +1,9 @@
+# Files modified in small-batch tests
+data
+Untitled*.ipynb
+
+
+# Environment tracking
+*__pycache__*
+.vscode*
+.ipynb_checkpoints*
