@@ -71,7 +71,7 @@ class WindowOp(FieldOp):
         windowlen = min(self.__window_len, self._lattice._num_bars_completed+1)
 
         return pd.Series({
-            ago : self._lattice._get_n_bar_ago_field_data(ago, self._dependent_field_id)[asset_id]
+            ago : self._lattice._get_n_bar_ago_asset_field_data(ago, asset_id, self._dependent_field_id)
             for ago in range(windowlen)
         })
 
@@ -86,9 +86,18 @@ class WindowOp(FieldOp):
             np.nan
         """
         return nan
-    
+
     @abstractmethod
     def op(self, data: pd.Series) -> Any:
+        """Mapping function that transforms input {bar -> value} pairs into a single value.
+        NOTE: This function is responsible for handling any data that comes its way. This includes handling np.nan,
+        empty strings, etc. 
+        Args:
+            data (pd.Series): {bar -> value} pairs for a particular field.
+
+        Returns:
+            Any: Any value.
+        """
         pass
 
     def execute_op(self, asset_id: AssetId) -> Any:
@@ -115,9 +124,19 @@ class CrossSectionalOp(FieldOp):
     def __gather_asset_data(self) -> pd.Series:
         asset_id_to_field_values = self._lattice._get_cur_bar_field_data(self._dependent_field_id)
         return pd.Series(asset_id_to_field_values)
-
+        
     @abstractmethod
     def op(self, data: pd.Series) -> pd.Series:
+        """Mapping function that transforms input {asset_id -> value} pairs into new {asset_id -> value} pairs.
+        NOTE: This function is responsible for handling any data that comes its way. This includes handling np.nan,
+        empty strings, etc. 
+
+        Args:
+            data (pd.Series): {asset_id -> value} pairs.
+
+        Returns:
+            pd.Series: new {asset_id -> value} pairs.
+        """
         pass
     
     def execute_op(self) -> pd.Series:
@@ -137,7 +156,10 @@ class CrossSectionalOp(FieldOp):
 # Derived window operations
 class SMA(WindowOp):
     def op(self, data: pd.Series) -> pd.Series:
-        return (data.sum() / data.size)
+        if data.isnull().sum()>0:
+            return nan
+        else:
+            return (data.sum() / data.size)
 
 
 # Derived cross sectional operations

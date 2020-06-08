@@ -56,29 +56,3 @@ class FieldId:
     
     def __str__(self):
         return str(self._field_id)
-
-
-class AssetFieldId:
-    """Fundamental identifier of CalcNodes within a particular bar.
-    """
-    def __init__(self, asset_id: AssetId, field_id: FieldId):
-        self._asset_field_id = (asset_id, field_id)
-
-    def get_asset_id(self):
-        return self._asset_field_id[0]
-
-    def get_field_id(self):
-        return self._asset_field_id[1]
-    
-    def __eq__(self, other):
-        return (self._asset_field_id == other._asset_field_id)
-
-    def __hash__(self):
-        return hash(self._asset_field_id)
-
-    def __repr__(self):
-        return 'AssetFieldId({}, {})'.format(self._asset_field_id[0], self._asset_field_id[1])
-
-    def __str__(self):
-        return self.__repr__()
-

@@ -5,44 +5,44 @@ from typing import Set, Callable, Dict, Any
 from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
-from engine.engine_utils import AssetId, FieldId, AssetFieldId, BadDAGException, StaticDAGException, DAGStatusCodes
+from engine.engine_utils import AssetId, FieldId, BadDAGException, StaticDAGException, DAGStatusCodes
 import engine.fields.fields as fields
-from collections import Counter
+from collections import Counter, OrderedDict
+from warnings import warn
 
-# CalcNode - the smalles unit in a CalcLattice
-# class CalcNode:
-    #     """Represents a single value in our lattice. If we imagine a 3D lattice of data points, where
-    #     the dimensions are (bars, assets, fields), then these would be the nodes in that lattice.
-    #     """
-
-    #     def __init__(self, value):
-    #         self.value = value
-    #         return
-
-
-# BarLayer - a bag of Values that are all on the same bar
+# BarLayer - a bag of values that are all on the same bar
 class BarLayer:
     """Dict-like data structure for inserting and accessing values for a given bar.
     """
     def __init__(self):
-        self.__bar_data: Dict[AssetFieldId, Any] = {}
+        self.__bar_data: Dict[AssetId, Dict[FieldId, Any]] = {}
 
     def get_value(self, asset_id: AssetId, field_id: FieldId) -> Any:
-        asset_field_id = AssetFieldId(asset_id, field_id)
-
-        if asset_field_id not in self.__bar_data:
-            raise ValueError("There's no node in this layer with asset_id={} and field_id={}.".format(asset_id, field_id))
-        return self.__bar_data[asset_field_id]
-
-    def insert_value(self, asset_id: AssetId, field_id: FieldId, node: Any) -> None:
-        self.__bar_data[AssetFieldId(asset_id, field_id)] = node
+        if asset_id in self.__bar_data:
+            field_id_to_value = self.__bar_data[asset_id]
+            if field_id in field_id_to_value:
+                return field_id_to_value[field_id]
+            else:
+                raise KeyError("There's no node in this BarLayer with field_id={}.".format(field_id))
+        else:
+            raise KeyError("There's no node in this BarLayer with asset_id={}.".format(asset_id))
+        
         return
 
-    def get_all_values(self):
+    def insert_value(self, asset_id: AssetId, field_id: FieldId, value: Any) -> None:
+        if asset_id not in self.__bar_data:
+            self.__bar_data[asset_id] = {}
+        self.__bar_data[asset_id][field_id] = value
+        return
+
+    def get_all_values(self) -> Dict[AssetId, Dict[FieldId, Any]]:
         return self.__bar_data
 
     def __repr__(self):
-        return self.__bar_data.__repr__()
+        return repr(self.__bar_data)
+
+    def __str__(self):
+        return str(self.__bar_data)
     pass
 
 
@@ -69,6 +69,7 @@ class CalcLattice:
 
         # Attributes that remain constant
         self.__asset_ids = asset_ids
+        self.__field_ids = [] # TODO: consider adding in functionality for adding fields at lattice construction time
         self.__num_assets = len(self.__asset_ids)
         self.__num_bars_stored = num_bars_stored
 
@@ -117,8 +118,6 @@ class CalcLattice:
         elif ago > self._num_bars_completed:
             raise IndexError('Accessing data from {} bars ago, but at most only {} bars of data have been fully computed.'.format(ago, self._num_bars_completed))
         res = self.__recent_bars[self.__cur_bar_index_inc_n(-ago)]
-        # print('CBI: {}'.format(self.__cur_bar_index))
-        print('Recent Bars:\n{}'.format(self.__recent_bars))
         return res
 
     def __get_cur_bar_data(self) -> BarLayer:
@@ -129,10 +128,6 @@ class CalcLattice:
         """
         return self.__get_n_bar_ago_data(0)
     
-    # def __get_n_bar_ago_values(self, ago: int) -> Dict[AssetFieldId, Any]:
-    #     all_nodes = self.__get_n_bar_ago_data(ago).get_all_values()
-    #     return {key : all_nodes[key].value for key in all_nodes}
-
     def _get_n_bar_ago_field_data(self, ago: int, field_id: FieldId) -> Dict[AssetId, Any]:
         """Make a mapping from AssetId to values for a specific field `ago` bars ago.
 
@@ -144,14 +139,17 @@ class CalcLattice:
             Dict[AssetId, Any]: mapping from AssetId to values for a specific field `ago` bars ago.
         """
         # TODO: perform operation in parallel over the different AssetFieldId keys
-
+        
         values = self.__get_n_bar_ago_data(ago).get_all_values()
-        asset_id_to_value: Dict[AssetId, Any] = {}
-        for asset_field_id in values:
-            if (asset_field_id.get_field_id() == field_id):
-                asset_id_to_value[asset_field_id.get_asset_id()] = values[asset_field_id]
+        asset_id_to_value: Dict[AssetId, Any] = {
+            asset_id : values[asset_id][field_id]
+            for asset_id in values
+        }
         return asset_id_to_value
         
+    def _get_n_bar_ago_asset_field_data(self, ago: int, asset_id: AssetId, field_id: FieldId) -> Any:
+        return self.__get_n_bar_ago_data(ago).get_value(asset_id, field_id)
+    
     def _get_cur_bar_field_data(self, field_id: FieldId) -> Dict[AssetId, Any]:
         return self._get_n_bar_ago_field_data(0, field_id)
     
@@ -175,14 +173,14 @@ class CalcLattice:
         new_bar_layer = BarLayer()
         self.__recent_bars[self.__cur_bar_index] = new_bar_layer # NOTE: modifies state
 
-        field_ids = list(new_bar_data[ list(new_bar_data.keys())[0] ].keys()) # NOTE: assumes all assets have the same fields (not the only time this assumption is made)
+        gen_field_ids = list(new_bar_data[ list(new_bar_data.keys())[0] ].keys()) # NOTE: assumes all assets have the same fields (not the only time this assumption is made)
         for asset_id in new_bar_data:
-            for field_id in field_ids:
+            for field_id in gen_field_ids:
                 value = new_bar_data[asset_id][field_id]
                 self.__insert_node_in_cur_layer(asset_id, field_id, value)
 
         # propagate all genesis fields
-        for gen_field_id in field_ids:
+        for gen_field_id in gen_field_ids:
             self.__propagate_from_genesis_field(gen_field_id)
 
         return
@@ -204,8 +202,8 @@ class CalcLattice:
                 for dep_asset_id in self.__asset_ids:
                     self.__propagate(dep_asset_id, cross_section_field_id, dep_field_results)
 
-    
     def __propagate(self, asset_id: AssetId, field_id: FieldId, cross_sectional_results: pd.Series = None) -> None:
+        # TODO: update docstring
         """Assuming that all of the nodes' dependencies have already been computed, (a) compute this node's value, and
         (b) recursively propagate forward by calling __propagate on any nodes whose dependencies are satisfied after this
         node's completion.
@@ -252,7 +250,22 @@ class CalcLattice:
         # TODO: add functionality to check that the dependency graph is non-circular and that all fields are reachable from the seed fields
         return DAGStatusCodes.OK
 
-    def new_bar(self, new_bar_data: Dict[AssetId, Dict[FieldId, Any]]):
+    def output_bar(self) -> pd.DataFrame:
+        """Takes the lattice's current bar and outputs the (asset_id, field_id) pair values, with
+            asset_ids as rows, and field_ids as columns.
+
+        Returns:
+            pd.DataFrame: Current bar data, with asset_ids as rows, and field_ids as columns.
+        """
+        bar_df = pd.DataFrame(index=self.__asset_ids, columns=self.__field_ids)
+        bar_data = self.__get_cur_bar_data()
+        for asset_id in self.__asset_ids:
+            for field_id in self.__field_ids:
+                bar_df.loc[asset_id][field_id] = bar_data.get_value(asset_id, field_id)
+        
+        return bar_df
+
+    def new_bar(self, new_bar_data: Dict[AssetId, Dict[FieldId, Any]]) -> None:
         dag_status_code = self.__check_DAG()
         if (self.__cur_bar_index == -1) and (dag_status_code != DAGStatusCodes.OK):
             raise BadDAGException(dag_status_code)
@@ -262,7 +275,25 @@ class CalcLattice:
 
         # print(self.__recent_bars)
 
-        self.__num_assets_completed = Counter()
+        self.__num_assets_completed = Counter() # reset at the end of calculation
+        
+        return 
+
+    def new_pandas_bar(self, new_bar_data: pd.DataFrame) -> None:
+        """Add a new bar of data as a DataFrame, where the rows are AssetIds
+        and the columns are FieldIds.
+
+        Args:
+            new_bar_data (pd.DataFrame): a new bar of data as a DataFrame, where the rows are AssetIds
+                and the columns are FieldIds.
+        """
+        dict_bar_data: Dict[AssetId, Dict[FieldId, Any]] = {}
+        for asset_id in new_bar_data.index:
+            dict_bar_data[asset_id] = {}
+            for field_id in new_bar_data.columns:
+                dict_bar_data[asset_id][field_id] = new_bar_data.loc[asset_id][field_id]
+        
+        return self.new_bar(dict_bar_data)
     
     def add_field(self, field: fields.Field):
         """Prepare the CalcLattice to execute this field.
@@ -275,16 +306,14 @@ class CalcLattice:
         if (self.__cur_bar_index != -1):
             raise StaticDAGException()
 
+        if field.field_id in self.__field_ids:
+            raise Exception('A field with the name `{}` already exists. Cannot have two fields with the same name.'.format(field.field_id))
+
         def append_to_dict(d: Dict, key, val):
             if key not in d:
                 d[key] = []
             d[key].append(val)
         
-        if field.field_id in self.__field_to_field_op:
-            raise Exception('A field with the name `{}` already exists. Cannot have two fields with the same name.'.format(field.field_id))
-        
-        # print(self.__field_to_field_op.keys())
-
         is_window_op = issubclass(field.field_operation, fields.WindowOp)
         is_cross_sectional_op = issubclass(field.field_operation, fields.CrossSectionalOp)
         is_injection_op = issubclass(field.field_operation, fields.InjectionOp)
@@ -304,17 +333,38 @@ class CalcLattice:
         else:
             raise ValueError('Unknown type for attribute `field_operation` of field: {}'.format(type(field.field_operation)))
 
+        self.__field_ids.append(field.field_id)
+
         pass
         
+    def __pd_repr(self) -> pd.DataFrame:
+        """Create a representation of the lattice using a pandas DataFrame 
+            with MultiIndex (bar, asset_id) index and fields as columns.
+
+        Returns:
+            pd.DataFrame: a representation of the lattice using a pandas DataFrame with MultiIndex 
+                (bar, asset_id) index and fields as columns.
+        """
+        # Set up MultiIndex DataFrame
+        available_bars = range(self._num_bars_completed-self.__num_bars_stored+1, self._num_bars_completed+1) # TODO: check indexing!
+        index = pd.MultiIndex.from_product([available_bars, self.__asset_ids]) # level 0 is bar, level 1 is asset
+        lattice_df = pd.DataFrame(index=index, columns=self.__field_ids)
+
+        for ago in range(self.__num_bars_stored):
+            bar_id = self._num_bars_completed-ago
+            cur_data = self.__get_n_bar_ago_data(ago)
+            for asset_id in self.__asset_ids:
+                for field_id in self.__field_ids:
+                    value = cur_data.get_value(asset_id, field_id)
+                    lattice_df.loc[(bar_id, asset_id)][field_id] = value
+
+        return lattice_df
+    
     def __str__(self):
-        s = ''
-        for ago in range(self.__num_bars_stored-1, -1, -1):
-            s += str(self.__get_n_bar_ago_data(ago))+'\n'
-        return s
+        return str(self.__pd_repr())
 
     def __repr__(self):
-        return str(self)
-
+        return repr(self.__pd_repr())
 
 if __name__ == "__main__":
     ''' Small BarLayer test; NOTE: this is not indicative of values that we would actually use in a BarLayer object.
@@ -325,7 +375,7 @@ if __name__ == "__main__":
     '''
     import time
     start = time.time()
-    num_bars_ = 5
+    num_bars_ = 20
     asset_ids_ = {AssetId('AAPL'), AssetId('MSFT'), AssetId('TSLA')}
     _lattice = CalcLattice(num_bars_, asset_ids_)
 
@@ -335,28 +385,37 @@ if __name__ == "__main__":
             'field_operation': fields.InjectionOp,
             'field_id': FieldId('Open')
         }),
-        # fields.Field({
-        #     'field_operation': fields.InjectionOp,
-        #     'field_id': FieldId('Close')
-        # })
+        fields.Field({
+            'field_operation': fields.InjectionOp,
+            'field_id': FieldId('Close')
+        })
     ]
 
-    # n_mavg = 1
-    # fields_ += [
-    #     fields.Field({
-    #         'field_operation': fields.SMA,
-    #         'field_id': FieldId(f'MAVG-Open-{i}'),
-    #         'dependent_field_id': FieldId('Open'),
-    #         'window_len': i
-    #     })
-    #     for i in range(2, n_mavg+2)
-    # ]
+    n_mavg = 1
+    fields_ += [
+        fields.Field({
+            'field_operation': fields.SMA,
+            'field_id': FieldId(f'MAVG-Open-{i}'),
+            'dependent_field_id': FieldId('Open'),
+            'window_len': i
+        })
+        for i in range(2, n_mavg+2)
+    ]
 
     fields_ += [
         fields.Field({
             'field_operation': fields.Z_Score,
-            'field_id': FieldId(f'ZScore-Open'),
-            'dependent_field_id': FieldId('Open'),
+            'field_id': FieldId(f'ZScore-[MAVG-Open-2]'),
+            'dependent_field_id': FieldId('MAVG-Open-2'),
+        })
+    ]
+
+    fields_ += [
+        fields.Field({
+            'field_operation': fields.SMA,
+            'field_id': FieldId(f'MAVG-[ZScore-[MAVG-Open-2]]-3'),
+            'dependent_field_id': FieldId('ZScore-[MAVG-Open-2]'),
+            'window_len': 3
         })
     ]
 
@@ -364,12 +423,13 @@ if __name__ == "__main__":
     for field in fields_:
         _lattice.add_field(field)
 
+    import random
     ## Adding data ##
     range_ = range(1, num_bars_+1)
     all_bars = { i :
-        {AssetId('AAPL'): {FieldId('Open'): i*10, FieldId('Close'): i*20},
-        AssetId('MSFT'):  {FieldId('Open'): i*20, FieldId('Close'): i*25},
-        AssetId('TSLA'):  {FieldId('Open'): i*1, FieldId('Close'): i*.01}
+        {AssetId('AAPL'): {FieldId('Open'): i*10*random.random(), FieldId('Close'): i*20*random.random()},
+        AssetId('MSFT'):  {FieldId('Open'): i*20*random.random(), FieldId('Close'): i*25*random.random()},
+        AssetId('TSLA'):  {FieldId('Open'): i*1*random.random(), FieldId('Close'): i*.01*random.random()}
         }
         for i in range_
     }
@@ -377,13 +437,12 @@ if __name__ == "__main__":
     ## Running! ##
     for i in range_:
         _lattice.new_bar(all_bars[i])
-        print('\n\n\n\n\n')
+        # print('\n\n\n\n\n')
 
     print(_lattice)
     
     print('Took {} seconds.'.format(time.time()-start))
-    print(_lattice._CalcLattice__asset_ids)
-
+    print(_lattice.output_bar())
     pass
 
 # '''
