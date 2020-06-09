@@ -350,7 +350,7 @@ class CalcLattice:
         index = pd.MultiIndex.from_product([available_bars, self.__asset_ids]) # level 0 is bar, level 1 is asset
         lattice_df = pd.DataFrame(index=index, columns=self.__field_ids)
 
-        for ago in range(self.__num_bars_stored):
+        for ago in range(min(self._num_bars_completed, self.__num_bars_stored)):
             bar_id = self._num_bars_completed-ago
             cur_data = self.__get_n_bar_ago_data(ago)
             for asset_id in self.__asset_ids:

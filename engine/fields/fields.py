@@ -178,7 +178,7 @@ class Z_Score(CrossSectionalOp):
 
 # Field class - interface for users to specify when adding a Field to a backtest
 class Field:
-    def __init__(self, params: Dict[str, Any]):
+    def __init__(self, params: Dict[str, Any]): # TODO: modify to accept named arguments
         self.__check_params(params)
 
         self.field_op_input = params.copy()

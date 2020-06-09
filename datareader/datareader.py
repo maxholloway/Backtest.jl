@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, List, Union, Callable
+from types import FunctionType
 import pandas as pd
 from engine.engine import AssetId, FieldId
 
@@ -8,10 +9,13 @@ DEFAULT_READ_CSV_OPTIONS = {
     'index_col': 'datetime'
 }
 
+DEFAULT_FIELD_TO_FIELD_ID_SCHEMA = lambda s: FieldId(s)
+
 class DataReaderOptions:
     
-    def __init__(self, read_csv_options: Dict[str, Any]):
+    def __init__(self, read_csv_options: Dict[str, Any], field_name_to_field_id: Union[ Callable[[str], FieldId], Dict[str, FieldId] ]=DEFAULT_FIELD_TO_FIELD_ID_SCHEMA):
         self.read_csv_options = read_csv_options
+        self.field_name_to_field_id = field_name_to_field_id
         
 
 class DataReaderBase:
@@ -62,6 +66,16 @@ class DataReader(DataReaderBase):
         self.__cur_data = pd.read_csv(self.data_paths[self.__cur_file_index], **self.reader_options.read_csv_options)
         if len(self.__cur_data) == 0:
             raise ValueError('Unable to extract bar data from {}; 0 bars were parsed.'.format(self.data_paths[self.__cur_file_index]))
+        self.__convert_cols_to_field_ids()
+    
+    def __convert_cols_to_field_ids(self):
+        schema = self.reader_options.field_name_to_field_id
+        if isinstance(schema, dict):
+            self.__cur_data.columns = [schema[col] for col in self.__cur_data.columns]
+        elif type(schema) is FunctionType:
+            self.__cur_data.columns = [schema(col) for col in self.__cur_data.columns]
+        else:
+            raise ValueError(f'Unknown schema type `{type(schema)}`.')
 
     def __more_data_files_exist(self):
         return (self.__cur_file_index+1) < len(self.data_paths)
