@@ -4,10 +4,11 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from engine.engine import CalcLattice
 from engine.fields.fields import Field
-from datareader.datareader import DataReaderBase
+from datareader.datareader import DataReaderBase, Bar
+from datareader.datareader_utils import NoMoreDataAvailableException
 from engine.engine_utils import AssetId, FieldId, StaticDAGException
 from strategy.events import EventBase, NewBarEvent, FieldProcessingCompletedEvent, OrderEvent
-from strategy.strategy_utils import FieldComputationLatencyException
+from strategy.strategy_utils import FieldComputationLatencyException, NoDataReadersException, InconsistentBarTimesException, DictList
 
 class EventQueue:
     
@@ -64,7 +65,6 @@ class BacktestOptions:
         self.num_bars_to_store = num_bars_to_store
         self.allotted_computation_time = allotted_computation_time if allotted_computation_time else self.barsize
         self.verbosity = verbosity
-
 
     
 class Backtest(ABC):
@@ -128,7 +128,7 @@ class Backtest(ABC):
         """
         if datareader.asset_id in self.__asset_ids:
             raise ValueError(f'There is aready a DataReader associated with {datareader.asset_id}. There cannot be two data readers for the same asset.')
-        
+        self.__asset_ids.add(datareader.asset_id)
         self.__datareaders.append(datareader)
         return
 
@@ -162,20 +162,49 @@ class Backtest(ABC):
         for field in self.__fields:
             self.__calclattice.add_field(field)
         pass
+
+    def __prepare_datareader(self, datareader) -> None:
+        if datareader.get_next_bar().time > (self.start_time + self.options.barsize):
+            raise Exception(f'Provided data does not go back far enough to support the given start time. Earliest data point is {datareader.get_cur_bar().time}.')
+
+        try:
+            while datareader.get_next_bar().time < self.start_time: # this call will move the datareader forward
+                pass
+        except NoMoreDataAvailableException as ex:
+            raise Exception('Could not find the given bar. Ensure that the end date provided to the backtest is valid.')
+    
+        return
+    
+    def __prepare_datareaders(self) -> None:
+        # TODO: perform all of these tasks in parallel
+        for datareader in self.__datareaders:
+            self.__prepare_datareader(datareader)
+
+        return
     
     def __load_genesis_data(self) -> float: # TODO: implement multiprocessing OR asyncio task logic to load all asset bars in parallel
         # for each of the assets that we're working with, load their input bars (i.e. the bars that would be streamed each time interval, such as OHLCV)
         # return [num successfully loaded assets]/[total num assets] (e.g. if 3/4 of the assets were loaded correctly, return .75)
-        # NOTE: THIS MODIFIES STATE BY ADDING BARS TO `events`!!
+        if len(self.__datareaders) == 0:
+            raise NoDataReadersException()
+
         num_failed_bar_loads = 0
         asset_to_genesis_field_to_data: Dict[AssetId, Dict[FieldId, Any]] = {}
+        times_to_assets = DictList() # to ensure that all of the times we're getting for the bars are the same
         for datareader in self.__datareaders:
             try:
-                asset_to_genesis_field_to_data[datareader.asset_id] = datareader.get_next_bar()
+                bar: Bar = datareader.get_next_bar()
             except Exception as ex:
                 self.__log('Got the following exception while getting genesis data for {}:\n'.format(datareader.asset_id, ex), VerbosityLevel.LOW)
                 num_failed_bar_loads += 1
-        correctly_classified_proportion = 1 - (num_failed_bar_loads)/len(self.__datareaders)
+        
+            asset_to_genesis_field_to_data[datareader.asset_id] = bar.data 
+            times_to_assets.insert(bar.time, datareader.asset_id)
+            
+        if len(times_to_assets) != 1:
+            raise InconsistentBarTimesException(times_to_assets)
+
+        correctly_classified_proportion = 1 - (num_failed_bar_loads) / len(self.__datareaders)
         
         return (correctly_classified_proportion, asset_to_genesis_field_to_data)        
         
@@ -187,7 +216,15 @@ class Backtest(ABC):
         else:
             raise Exception("Backtest instances can only be run once. `run` was invoked more than once.")
 
+        self.__log('Beginning preparation of lattice.', VerbosityLevel.HIGH)
         self.__prepare_lattice()
+        self.__log('Finished preparation of lattice.', VerbosityLevel.HIGH)
+
+        self.__log('Beginning preparation of DataReaders.', VerbosityLevel.HIGH)
+        self.__prepare_datareaders()
+        self.__log('Finished preparation of DataReaders.', VerbosityLevel.HIGH)
+
+
 
         while True:
             if self.__next_bar_exists(): # check if it's possible to start the next bar
@@ -286,11 +323,11 @@ class Backtest(ABC):
         return
 
     @abstractmethod
-    def on_data_event(self, event: FieldProcessingCompletedEvent): # TODO: decide if this is the right level of abstraction for the user to overwrite
+    def on_data_event(self, event: FieldProcessingCompletedEvent): 
         pass
 
     @abstractmethod
-    def on_order_event(self, event: OrderEvent): # TODO: decide if this is the right level of abstraction for the user to overwrite
+    def on_order_event(self, event: OrderEvent):
         pass
 
     

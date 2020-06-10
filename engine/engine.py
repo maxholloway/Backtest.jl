@@ -47,7 +47,7 @@ class BarLayer:
 
 
 # CalcLattice - an ordered collection of BarLayers
-class CalcLattice:
+class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index (if it won't interfere with multiprocessing)
     """A structured collection of Values. This lattice is a DAG. The main utility 
         that comes from this data structure is the ability to run Values
         that depend on other Values for input. We can also inject input in in the
@@ -69,7 +69,7 @@ class CalcLattice:
 
         # Attributes that remain constant
         self.__asset_ids = asset_ids
-        self.__field_ids = [] # TODO: consider adding in functionality for adding fields at lattice construction time
+        self.__field_ids = []
         self.__num_assets = len(self.__asset_ids)
         self.__num_bars_stored = num_bars_stored
 
@@ -138,7 +138,7 @@ class CalcLattice:
         Returns:
             Dict[AssetId, Any]: mapping from AssetId to values for a specific field `ago` bars ago.
         """
-        # TODO: perform operation in parallel over the different AssetFieldId keys
+        # NOTE: could perform operation in parallel over the different AssetId keys. This will likely not make a huge difference on runtime.
         
         values = self.__get_n_bar_ago_data(ago).get_all_values()
         asset_id_to_value: Dict[AssetId, Any] = {
@@ -247,7 +247,6 @@ class CalcLattice:
         return
 
     def __check_DAG(self) -> int:
-        # TODO: add functionality to check that the dependency graph is non-circular and that all fields are reachable from the seed fields
         return DAGStatusCodes.OK
 
     def output_bar(self) -> pd.DataFrame:
@@ -270,10 +269,7 @@ class CalcLattice:
         if (self.__cur_bar_index == -1) and (dag_status_code != DAGStatusCodes.OK):
             raise BadDAGException(dag_status_code)
         
-        # TODO: Add new bar data, and call compute on each field that's added
         self.__inject_and_propagate(new_bar_data)
-
-        # print(self.__recent_bars)
 
         self.__num_assets_completed = Counter() # reset at the end of calculation
         
@@ -346,7 +342,8 @@ class CalcLattice:
                 (bar, asset_id) index and fields as columns.
         """
         # Set up MultiIndex DataFrame
-        available_bars = range(self._num_bars_completed-self.__num_bars_stored+1, self._num_bars_completed+1) # TODO: check indexing!
+        earliest_bar_indx = max(0, self._num_bars_completed-self.__num_bars_stored+1)
+        available_bars = range(earliest_bar_indx, self._num_bars_completed+1) # TODO: check indexing!
         index = pd.MultiIndex.from_product([available_bars, self.__asset_ids]) # level 0 is bar, level 1 is asset
         lattice_df = pd.DataFrame(index=index, columns=self.__field_ids)
 
