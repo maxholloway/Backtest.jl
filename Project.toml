@@ -3,6 +3,9 @@ uuid = "d230087d-4aa4-462d-9589-25ab6a28c65d"
 authors = ["Max Holloway"]
 version = "0.1.0"
 
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+
 [compat]
 julia = "1"
 
