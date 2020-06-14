@@ -5,8 +5,7 @@ from typing import Set, Callable, Dict, Any
 from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
-from ids.ids import AssetId, FieldId
-from engine.engine_utils import BadDAGException, StaticDAGException, DAGStatusCodes
+from engine.engine_utils import AssetId, FieldId, BadDAGException, StaticDAGException, DAGStatusCodes
 import engine.fields.fields as fields
 from collections import Counter, OrderedDict
 from warnings import warn
@@ -94,7 +93,7 @@ class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index
     def __cur_bar_index_inc(self):
         return self.__cur_bar_index_inc_n(1)
 
-    def __get_n_bar_ago_data(self, ago: int) -> BarLayer: # PORT
+    def __get_n_bar_ago_data(self, ago: int) -> BarLayer:
         """Returns a representation of all Values for the current bar.
 
         Arguments:
@@ -121,7 +120,7 @@ class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index
         res = self.__recent_bars[self.__cur_bar_index_inc_n(-ago)]
         return res
 
-    def __get_cur_bar_data(self) -> BarLayer: # PORT
+    def __get_cur_bar_data(self) -> BarLayer:
         """Returns a representation of all Values for the current bar.
 
         Returns:
@@ -174,7 +173,7 @@ class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index
         new_bar_layer = BarLayer()
         self.__recent_bars[self.__cur_bar_index] = new_bar_layer # NOTE: modifies state
 
-        gen_field_ids = new_bar_data[ list(new_bar_data.keys())[0] ].keys() # NOTE: assumes all assets have the same fields (not the only time this assumption is made)
+        gen_field_ids = list(new_bar_data[ list(new_bar_data.keys())[0] ].keys()) # NOTE: assumes all assets have the same fields (not the only time this assumption is made)
         for asset_id in new_bar_data:
             for field_id in gen_field_ids:
                 value = new_bar_data[asset_id][field_id]
@@ -227,7 +226,7 @@ class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index
         else:
             raise ValueError('Encountered unidentified field operation with type: {}.'.format(type(field_op)))
 
-        if result != None:
+        if result:
             self.__insert_node_in_cur_layer(asset_id, field_id, result) # NOTE: modifies state of the CalcLattice data
 
         # Propagate window calculations forward
@@ -266,10 +265,9 @@ class CalcLattice: # TODO: REPLACE BarLayer WITH A pd.DataFrame with multi-index
         return bar_df
 
     def new_bar(self, new_bar_data: Dict[AssetId, Dict[FieldId, Any]]) -> None:
-        if (self.__cur_bar_index == -1):
-            dag_status_code = self.__check_DAG()
-            if (dag_status_code != DAGStatusCodes.OK):
-                raise BadDAGException(dag_status_code)
+        dag_status_code = self.__check_DAG()
+        if (self.__cur_bar_index == -1) and (dag_status_code != DAGStatusCodes.OK):
+            raise BadDAGException(dag_status_code)
         
         self.__inject_and_propagate(new_bar_data)
 
@@ -374,7 +372,7 @@ if __name__ == "__main__":
     '''
     import time
     start = time.time()
-    num_bars_ = 20
+    num_bars_ = 1000
     asset_ids_ = {AssetId('AAPL'), AssetId('MSFT'), AssetId('TSLA')}
     _lattice = CalcLattice(num_bars_, asset_ids_)
 

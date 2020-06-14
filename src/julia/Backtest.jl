@@ -6,12 +6,16 @@ module ID
   abstract type Id end
 
   struct AssetId <: Id
-    assetid::String
+    id::String
   end
 
   struct FieldId <: Id
-    fieldid::String
+    id::String
   end
+
+  convert(::Type{FieldId}, id::String) = FieldId(id)
+  convert(::Type{AssetId}, id::String) = Assetid(id)
+  convert(::Type{String}, id::T) where {T<:Id} = id.id
 
 end
 
@@ -83,6 +87,7 @@ end
 
 module ConcreteFields
   using Statistics
+  using NamedArrays
   using ..ID: AssetId, FieldId
   using ..AbstractFields: AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
 
@@ -132,56 +137,39 @@ module ConcreteFields
     upstreamfieldid::FieldId
   end
 
-  function dofieldop(crosssectionalfieldoperation::ZScore, data::Dict{AssetId, Any})::Dict{AssetId, Any}
-    index_to_assetid::Dict{Integer, AssetId} = Dict()
-    values::Vector = Vector(undef, length(keys(data)))
-    for (i, assetid) in enumerate(keys(data))
-      index_to_assetid[i] = assetid
-      values[i] = data[assetid]
+  function dofieldop(crosssectionalfieldoperation::ZScore, assetdata::NamedArray)::NamedArray
+    mu = mean(assetdata)
+    sigma = std(assetdata)
+    for i in 1:length(assetdata)
+      assetdata[i] = (assetdata[i]-mu)/sigma
     end
-    
-    mu = mean(values)
-    print("mean: "); println(mu)
-    sigma = std(values)
-    print("std-dev: "); println(sigma)
-    print("values: "); println(values)
-    value_results = [(value-mu)/sigma for value in values]
-    print("Value results: "); println(value_results)
-    results::Dict{AssetId, Any} = Dict{AssetId, Any}()
-    for (i, result) in enumerate(value_results)
-      assetid = index_to_assetid[i]
-      results[assetid] = result
-    end
-    return results
+    return assetdata
   end
-
 end
 
 module Engine
   using Printf
   using Distributed
+  using NamedArrays: NamedArray
   using ..ID: AssetId, FieldId
   using ..AbstractFields: AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
   using ..ConcreteFields: dofieldop
 
   ## BarLayer definition and related functions ##
   struct BarLayer
-    bardata::Dict{AssetId, Dict{FieldId, T}} where {T<:Any} # map to a map to a value
+    bardata::NamedArray{T, 2} where {T<:Any}
+  end
+  function BarLayer(assetids::Vector{AssetId}, fieldids::Vector{FieldId})
+    unnamedarray = Array{Any, 2}(undef, length(assetids), length(fieldids))
+    return BarLayer(NamedArray(unnamedarray, (assetids, fieldids)))
   end
 
   function getvalue(barlayer::BarLayer, assetid::AssetId, fieldid::FieldId)
-    return barlayer.bardata[assetid][fieldid]
-  end
-
-  function hasvalue(barlayer::BarLayer, assetid::AssetId, fieldid::FieldId)
-    return haskey(barlayer.bardata, assetid) && haskey(barlayer.bardata[assetid], fieldid)
+    return barlayer.bardata[assetid, fieldid]
   end
 
   function insertvalue!(barlayer::BarLayer, assetid::AssetId, fieldid::FieldId, value)
-    if !haskey(barlayer.bardata, assetid)
-      barlayer.bardata[assetid] = Dict{FieldId, typeof(value)}()
-    end
-    barlayer.bardata[assetid][fieldid] = value
+    barlayer.bardata[assetid, fieldid] = value
   end
 
   function getallvalues(barlayer::BarLayer)
@@ -211,12 +199,12 @@ module Engine
   export CalcLattice
   mutable struct CalcLattice
     # Attributes that remain constant
-    assetids::Set{AssetId}
+    assetids::Vector{AssetId}
     fieldids::Vector{FieldId} # TODO: consider making a CalcLatticeFieldInfo struct that's created before CalcLattice
     numbarsstored::Integer
     
     # Attributes maintaining storage and access of bars
-    recentbars::Array{BarLayer, 1} # most recent -> least recent
+    recentbars::Vector{BarLayer} # most recent -> least recent
     curbarindex::Integer
 
     # Attributes that change when new bar propagation occurs
@@ -229,7 +217,7 @@ module Engine
     genesisfieldids::Set{FieldId}
   end
 
-  function CalcLattice(nbarsstored::Integer, assetids::Set{AssetId})::CalcLattice
+  function CalcLattice(nbarsstored::Integer, assetids::Vector{AssetId})::CalcLattice
     return CalcLattice(
       assetids,             # asset ids
       Vector{FieldId}(),        # field ids
@@ -261,18 +249,15 @@ module Engine
       deleteat!(lattice.recentbars, 1) # delete least recent bar
     end
 
-    barlayer = BarLayer(Dict{AssetId, Dict{FieldId, Any}}())
+    barlayer = BarLayer(lattice.assetids, lattice.fieldids)
     push!(lattice.recentbars, barlayer)
   end
 
   function insertnode!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId, value)
     currentbar = getcurrentbar(lattice)
-    if hasvalue(currentbar, assetid, fieldid) # check if node exists already
-      throw("Attempted to insert a node that was already inserted!")
-    else
-      hitcounter!(lattice.numcompletedassets, fieldid)
-      insertvalue!(currentbar, assetid, fieldid, value)
-    end
+    # TODO: Add functionality to check if this value already exists
+    hitcounter!(lattice.numcompletedassets, fieldid)
+    insertvalue!(currentbar, assetid, fieldid, value)
   end
 
   function getwindowdata(lattice::CalcLattice, windowfieldoperation::AbstractWindowFieldOperation, assetid::AssetId)::Vector
@@ -308,21 +293,27 @@ module Engine
     # Set value for this node
     insertnode!(lattice, assetid, fieldid, value)
   end
-
-  function compute!(lattice::CalcLattice, fieldid::FieldId)
-    """Computes the node for all of the assetes of a cross sectional field.
-    """
-    # Get data for the cross sectional operation (asset is the free variable)
-    crosssectionalfieldoperation = lattice.fieldids_to_ops[fieldid]
+  
+  function getcrosssectionaldata(lattice::CalcLattice, crosssectionalfieldoperation::AbstractCrossSectionalFieldOperation)::NamedArray
     upstreamfieldid = crosssectionalfieldoperation.upstreamfieldid
     currentbar = getcurrentbar(lattice)
-    assetdata = Dict{AssetId, Any}()
+    emptyassets = Vector(undef, length(lattice.assetids))
+    assetdata = NamedArray(emptyassets, lattice.assetids)
     for assetid in lattice.assetids
       assetdata[assetid] = getvalue(currentbar, assetid, upstreamfieldid)
     end
+    return assetdata
+  end
+  
+  function compute!(lattice::CalcLattice, fieldid::FieldId)
+    """Computes the node for all of the assetes of a cross sectional field.
+    """
+    crosssectionalfieldoperation = lattice.fieldids_to_ops[fieldid]
+    # Get data for the cross sectional operation (asset is the free variable)
+    assetdata = getcrosssectionaldata(lattice, crosssectionalfieldoperation)
 
     # Perform the cross sectional operation
-    asset_results::Dict{AssetId, Any} = dofieldop(crosssectionalfieldoperation, assetdata)
+    asset_results::NamedArray = dofieldop(crosssectionalfieldoperation, assetdata)
 
     # Set value for all assets on this bar and field
     for assetid in lattice.assetids
@@ -417,18 +408,16 @@ module Test
   end
 
   function abstractfieldstest()
-
   end
 
   function concretefieldstest()
-
   end
   
   function enginetest()
 
     # Make a backtest object
-    nbarstostore = 10
-    assetids = Set([AssetId("AAPL"), AssetId("MSFT"), AssetId("TSLA")])
+    nbarstostore = 1_000
+    assetids = [AssetId("AAPL"), AssetId("MSFT"), AssetId("TSLA")]
     lattice = CalcLattice(nbarstostore, assetids)
 
     function rand_(base::Number)
@@ -439,7 +428,7 @@ module Test
     end
     
     # Make data
-    nbarstorun = max(nbarstostore, 10)
+    nbarstorun = max(nbarstostore, 1000)
     allbars = [
       Dict(
         AssetId("AAPL") => Dict(FieldId("Open") => rand_(1.0*i), FieldId("Close") => rand_(1.2*i)),
@@ -456,8 +445,10 @@ module Test
       Open(FieldId("Open")),
       Close(FieldId("Close")),
       SMA(FieldId("SMA-Open-2"), FieldId("Open"), 2),
-      SMA(FieldId("SMA-Close-3"), FieldId("Close"), 3),
-      ZScore(FieldId("ZScore-Open"), FieldId("Open"))
+      # SMA(FieldId("SMA-Close-3"), FieldId("Close"), 3),
+      ZScore(FieldId("ZScore-[SMA-Open-2]"), FieldId("SMA-Open-2")),
+      # ZScore(FieldId("ZScore-SMA-Close-3"), FieldId("SMA-Close-3")),
+      SMA(FieldId("SMA-[ZScore-[SMA-Open-2]]-3"), FieldId("ZScore-[SMA-Open-2]"), 3)
     ])
     # print("Fields: ")
     # println(fields)
@@ -466,17 +457,27 @@ module Test
       addfield!(lattice, field)
     end
 
-    print("Dict afterward: ")
-    println(lattice.windowdependentfields)
+    # print("Dict afterward: ")
+    # println(lattice.windowdependentfields)
     
 
     # Feed bars into engine
+    # (for benchmarking purposes) add first bar separately so that compile time is not included in the benchmark
+    newbar!(lattice, allbars[1]);
+
     @time begin
-    for bar in allbars
-      newbar!(lattice, bar)
+    for barindex in 2:length(allbars)
+      newbar!(lattice, allbars[barindex])
     end end
     
-    println(lattice.recentbars[lattice.numbarsstored])
+    nbarstoprint = 1
+    for i in (lattice.numbarsstored-nbarstoprint+1):lattice.numbarsstored
+      println(lattice.recentbars[i])
+    end
+
+  end
+
+  function backtesttest()
 
   end
 
@@ -485,3 +486,4 @@ end
 end;
 
 Backtest.Test.enginetest()
+Backtest.Test.backtesttest()
