@@ -82,8 +82,8 @@ module AbstractFields
 end
 
 module ConcreteFields
-
-  using ..ID: FieldId
+  using Statistics
+  using ..ID: AssetId, FieldId
   using ..AbstractFields: AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
 
   ## Common genesis field operations ##
@@ -127,11 +127,39 @@ module ConcreteFields
 
 
   ## Common cross sectional field operations ##
+  struct ZScore <: AbstractCrossSectionalFieldOperation
+    fieldid::FieldId
+    upstreamfieldid::FieldId
+  end
+
+  function dofieldop(crosssectionalfieldoperation::ZScore, data::Dict{AssetId, Any})::Dict{AssetId, Any}
+    index_to_assetid::Dict{Integer, AssetId} = Dict()
+    values::Vector = Vector(undef, length(keys(data)))
+    for (i, assetid) in enumerate(keys(data))
+      index_to_assetid[i] = assetid
+      values[i] = data[assetid]
+    end
+    
+    mu = mean(values)
+    print("mean: "); println(mu)
+    sigma = std(values)
+    print("std-dev: "); println(sigma)
+    print("values: "); println(values)
+    value_results = [(value-mu)/sigma for value in values]
+    print("Value results: "); println(value_results)
+    results::Dict{AssetId, Any} = Dict{AssetId, Any}()
+    for (i, result) in enumerate(value_results)
+      assetid = index_to_assetid[i]
+      results[assetid] = result
+    end
+    return results
+  end
 
 end
 
 module Engine
   using Printf
+  using Distributed
   using ..ID: AssetId, FieldId
   using ..AbstractFields: AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
   using ..ConcreteFields: dofieldop
@@ -238,11 +266,7 @@ module Engine
   end
 
   function insertnode!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId, value)
-    # print("Asset id: "); println(assetid)
-    # print("Field id: "); println(fieldid)
-    # print("Value: "); println(value)
     currentbar = getcurrentbar(lattice)
-    # println("Got current bar.")
     if hasvalue(currentbar, assetid, fieldid) # check if node exists already
       throw("Attempted to insert a node that was already inserted!")
     else
@@ -324,7 +348,7 @@ module Engine
     allassetscompleted = (getcount(lattice.numcompletedassets, fieldid) == length(lattice.assetids))
     if hascrosssectionaldependencies && allassetscompleted
       for crosssectionaldependentfieldid in lattice.crosssectionaldependentfields[fieldid]
-        compute!(lattice, fieldid)
+        compute!(lattice, crosssectionaldependentfieldid)
         for assetid_ in lattice.assetids
           propagate!(lattice, assetid_, crosssectionaldependentfieldid)
         end
@@ -339,16 +363,10 @@ module Engine
     
     lattice.numcompletedassets = Counter{FieldId}()
     lattice.curbarindex += 1
-    # print("New bar and `curbarindex` is "); println(lattice.curbarindex)
     updatebars!(lattice)
-    # println("Here!\n\n\n")
-    # print("Genesis field ids: ")
-    # println(lattice.genesisfieldids)
-    # Populate lattice with genesis new bar data
     for assetid in keys(newbardata)
       for fieldid in lattice.genesisfieldids
         value = newbardata[assetid][fieldid]
-        # print("Vaue for "); print(assetid); print(", "); print(fieldid); print(": "), println(value)
         insertnode!(lattice, assetid, fieldid, value)
         propagate!(lattice, assetid, fieldid)
       end
@@ -383,9 +401,7 @@ module Engine
     else
       throw("Currently, the only supported field operations are subtypes of `AbstractGenesisFieldOperation`, `AbstractWindowFieldOperation`, or `AbstractCrossSectionalFieldOperation`.")
     end
-    # println("\n\nHERE\n\n\n")
     lattice.fieldids_to_ops[newfieldoperation.fieldid] = newfieldoperation
-    # println("\n\nHERE\n\n\n")
   end
 
 end
@@ -395,7 +411,7 @@ module Test
   using ..ID: AssetId, FieldId
   using ..Engine: CalcLattice, newbar!, addfield!
   using ..AbstractFields: AbstractFieldOperation
-  using ..ConcreteFields: Open, Close, SMA
+  using ..ConcreteFields: Open, Close, SMA, ZScore
   function idtest()
 
   end
@@ -411,25 +427,25 @@ module Test
   function enginetest()
 
     # Make a backtest object
-    nbarstostore = 100000
+    nbarstostore = 10
     assetids = Set([AssetId("AAPL"), AssetId("MSFT"), AssetId("TSLA")])
     lattice = CalcLattice(nbarstostore, assetids)
 
-
     function rand_(base::Number)
       SEED = 1234
-      rng = MersenneTwister(SEED)
+      rng = MersenneTwister() # Optional: include SEED for reproducibility
       result = base*(1+randn(rng))
-      return base
+      return result
     end
     
     # Make data
+    nbarstorun = max(nbarstostore, 10)
     allbars = [
       Dict(
-        AssetId("AAPL") => Dict(FieldId("Open") => rand_(10*i), FieldId("Close") => rand_(12*i)),
-        AssetId("MSFT") => Dict(FieldId("Open") => rand_(20*i), FieldId("Close") => rand_(25*i)),
-        AssetId("TSLA") => Dict(FieldId("Open") => rand_(30*i), FieldId("Close") => rand_(25*i))
-      ) for i in 1:nbarstostore
+        AssetId("AAPL") => Dict(FieldId("Open") => rand_(1.0*i), FieldId("Close") => rand_(1.2*i)),
+        AssetId("MSFT") => Dict(FieldId("Open") => rand_(2.0*i), FieldId("Close") => rand_(2.5*i)),
+        AssetId("TSLA") => Dict(FieldId("Open") => rand_(3.0*i), FieldId("Close") => rand_(2.5*i))
+      ) for i in 1:nbarstorun
     ]
     # println(allbars)
     # println()
@@ -439,9 +455,9 @@ module Test
     fields = Vector([
       Open(FieldId("Open")),
       Close(FieldId("Close")),
-      SMA(FieldId("SMA-Open-1"), FieldId("Open"), 1),
       SMA(FieldId("SMA-Open-2"), FieldId("Open"), 2),
-      SMA(FieldId("SMA-Close-3"), FieldId("Close"), 3)
+      SMA(FieldId("SMA-Close-3"), FieldId("Close"), 3),
+      ZScore(FieldId("ZScore-Open"), FieldId("Open"))
     ])
     # print("Fields: ")
     # println(fields)
@@ -450,18 +466,17 @@ module Test
       addfield!(lattice, field)
     end
 
-    # print("Dict afterward: ")
-    # println(lattice.windowdependentfields)
+    print("Dict afterward: ")
+    println(lattice.windowdependentfields)
     
 
     # Feed bars into engine
     @time begin
     for bar in allbars
       newbar!(lattice, bar)
-    end
-    end
+    end end
     
-    # println(lattice.recentbars[lattice.numbarsstored])
+    println(lattice.recentbars[lattice.numbarsstored])
 
   end
 
