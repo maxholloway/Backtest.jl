@@ -1,9 +1,10 @@
-# Files modified in small-batch tests
+# Files modified in small tests
 data
 Untitled*.ipynb
 
+# Inner git repos used for dev
+*/.git/*
 
 # Environment tracking
 *__pycache__*
-.vscode*
 .ipynb_checkpoints*
