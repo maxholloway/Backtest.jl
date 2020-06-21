@@ -8,3 +8,4 @@ Untitled*.ipynb
 # Environment tracking
 *__pycache__*
 .ipynb_checkpoints*
+*/jenv
