@@ -1,9 +1,15 @@
 # This file is machine-generated - editing it directly is not advised
 
 [[AbstractFields]]
-deps = ["Ids"]
-path = "src/AbstractFields"
+deps = ["Exceptions", "Ids"]
+path = "../src/AbstractFields"
 uuid = "8d025939-6e48-4ff2-bd8e-304382413307"
+version = "0.1.0"
+
+[[Backtest]]
+deps = ["CSV", "DataFrames", "Dates", "Engine", "Exceptions", "Revise"]
+path = ".."
+uuid = "d230087d-4aa4-462d-9589-25ab6a28c65d"
 version = "0.1.0"
 
 [[Base64]]
@@ -40,7 +46,7 @@ version = "3.12.0"
 
 [[ConcreteFields]]
 deps = ["AbstractFields", "Ids", "NamedArrays", "Statistics"]
-path = "src/ConcreteFields"
+path = "../src/ConcreteFields"
 uuid = "5d0dff1c-f2f2-469c-b693-904930e62eaa"
 version = "0.1.0"
 
@@ -56,16 +62,16 @@ uuid = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 version = "0.21.2"
 
 [[DataReaders]]
-deps = ["CSV", "DataFrames", "Dates"]
-path = "src/DataReaders"
+deps = ["CSV", "DataFrames", "Dates", "Exceptions", "Ids"]
+path = "../src/DataReaders"
 uuid = "5bcc2e7c-e6be-45e1-a08b-7131ee095f9a"
 version = "0.1.0"
 
 [[DataStructures]]
 deps = ["InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "af6d9c86e191c917c2276fbede1137e8ea20157f"
+git-tree-sha1 = "be680f1ad03c0a03796aa3fda5a2180df7f83b46"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.17.17"
+version = "0.17.18"
 
 [[DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
@@ -86,13 +92,19 @@ uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[Engine]]
 deps = ["AbstractFields", "ConcreteFields", "Ids", "NamedArrays"]
-path = "src/Engine"
+path = "../src/Engine"
 uuid = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
 version = "0.1.0"
 
+[[Events]]
+deps = ["Dates", "Ids"]
+path = "../src/Events"
+uuid = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
+version = "0.1.0"
+
 [[Exceptions]]
-deps = ["DataReaders", "Dates"]
-path = "src/Exceptions"
+deps = ["Dates"]
+path = "../src/Exceptions"
 uuid = "ce3d6ca4-e3ea-45b5-9779-61b7b5e9aa95"
 version = "0.1.0"
 
@@ -110,7 +122,7 @@ deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 
 [[Ids]]
-path = "src/Ids"
+path = "../src/Ids"
 uuid = "bce88478-5a08-4ce1-89fa-cb050a46252e"
 version = "0.1.0"
 
