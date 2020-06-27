@@ -1,7 +1,7 @@
 # This file is machine-generated - editing it directly is not advised
 
 [[AbstractFields]]
-deps = ["Ids"]
+deps = ["Exceptions", "Ids"]
 path = "src/AbstractFields"
 uuid = "8d025939-6e48-4ff2-bd8e-304382413307"
 version = "0.1.0"
@@ -55,12 +55,6 @@ git-tree-sha1 = "02f08ae77249b7f6d4186b081a016fb7454c616f"
 uuid = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 version = "0.21.2"
 
-[[DataReaders]]
-deps = ["CSV", "DataFrames", "Dates"]
-path = "src/DataReaders"
-uuid = "5bcc2e7c-e6be-45e1-a08b-7131ee095f9a"
-version = "0.1.0"
-
 [[DataStructures]]
 deps = ["InteractiveUtils", "OrderedCollections"]
 git-tree-sha1 = "af6d9c86e191c917c2276fbede1137e8ea20157f"
@@ -90,8 +84,14 @@ path = "src/Engine"
 uuid = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
 version = "0.1.0"
 
+[[Events]]
+deps = ["Dates", "Ids", "Orders"]
+path = "src/Events"
+uuid = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
+version = "0.1.0"
+
 [[Exceptions]]
-deps = ["DataReaders", "Dates"]
+deps = ["Dates", "Ids"]
 path = "src/Exceptions"
 uuid = "ce3d6ca4-e3ea-45b5-9779-61b7b5e9aa95"
 version = "0.1.0"
@@ -184,6 +184,12 @@ version = "0.9.4"
 git-tree-sha1 = "12ce190210d278e12644bcadf5b21cbdcf225cd3"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.2.0"
+
+[[Orders]]
+deps = ["Ids"]
+path = "src/Orders"
+uuid = "ddedc895-b71f-4a47-a77d-70e2d2880d2c"
+version = "0.1.0"
 
 [[Parsers]]
 deps = ["Dates", "Test"]

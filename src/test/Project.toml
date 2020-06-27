@@ -1,7 +1,0 @@
-[deps]
-ConcreteFields = "5d0dff1c-f2f2-469c-b693-904930e62eaa"
-DataReaders = "5bcc2e7c-e6be-45e1-a08b-7131ee095f9a"
-Engine = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
-Events = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
-Ids = "bce88478-5a08-4ce1-89fa-cb050a46252e"
-Orders = "ddedc895-b71f-4a47-a77d-70e2d2880d2c"

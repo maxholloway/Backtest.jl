@@ -5,7 +5,12 @@ version = "0.1.0"
 
 [deps]
 Backtest = "d230087d-4aa4-462d-9589-25ab6a28c65d"
+ConcreteFields = "5d0dff1c-f2f2-469c-b693-904930e62eaa"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Engine = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
 Events = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
+Exceptions = "ce3d6ca4-e3ea-45b5-9779-61b7b5e9aa95"
+Ids = "bce88478-5a08-4ce1-89fa-cb050a46252e"
+Orders = "ddedc895-b71f-4a47-a77d-70e2d2880d2c"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"

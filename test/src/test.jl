@@ -1,11 +1,16 @@
 module test
+
 using Random
+using Dates
+using Ids: AssetId
 using Engine: CalcLattice, addfields!, newbar!
-using ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore
-using Events: FieldCompletedProcessingEvent, OrderEvent
+using ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore, Rank
+using Events: FieldCompletedProcessingEvent, AbstractOrderEvent
 using DataReaders: InMemoryDataReader
 using Backtest
-using Dates
+using Orders: MarketOrder, LimitOrder
+
+
 function enginetest()
 
   # Make a backtest object
@@ -85,31 +90,54 @@ end
 function bttest()
   ## Make the data readers ##
   assetids = ["BTCUSDT", "LTCUSDT", "ETHUSDT"]
-  datareaders = [getexamplecryptodatareader(assetid) for assetid in assetids]
+  datareaders = Dict{AssetId, InMemoryDataReader}()
+  for assetid in assetids
+    datareaders[assetid] = getexamplecryptodatareader(assetid)
+  end
 
   ## Make the field operations ##
+  (o, h, l, c, v) = ("Open", "High", "Low", "Close", "Volume")
   fieldoperations = Vector([
-    Open("Open"),
-    Close("Close"),
-    SMA("SMA2-Open", "Open", 2),
-    SMA("SMA3-Close", "Close", 3),
-    ZScore("ZScore-Open", "Open")
+    Open(o),
+    High(h),
+    Low(l),
+    Close(c),
+    Volume(v),
+    SMA("SMA2-Open", o, 2),
+    SMA("SMA3-Close", c, 3),
+    ZScore("ZScore-Open", o),
+    Rank("Rank-Close", c)
   ])
 
   ## Set strategy options (doesn't have to be this verbose irl)##
-  function ondata(strat::Backtest.Strategy, event::FieldCompletedProcessingEvent) end
-  function onorder(strat::Backtest.Strategy, event::OrderEvent) end
+  function ondata(strat::Backtest.Strategy, event::FieldCompletedProcessingEvent)
+    # Backtest.log(strat, "just received data for the previous bar; placing an order of 1 litecoin", Backtest.NOVERBOSITY)
+    # Backtest.order!(strat, MarketOrder("LTCUSDT", 1))
+    Backtest.order!(strat, LimitOrder("LTCUSDT", -1, 10))
+  end
+  function onorder(strat::Backtest.Strategy, event::ET) where {ET<:AbstractOrderEvent}
+    println(event)
+    println(strat.portfolio)
+  end
   stratoptions = Backtest.StrategyOptions(
     datareaders=datareaders,
     fieldoperations=fieldoperations,
     numlookbackbars=-1,
     start=Dates.DateTime(2019, 06, 02, 0, 0),
-    endtime=Dates.DateTime(2019, 06, 30, 0, 0),
+    endtime=Dates.DateTime(2019, 06, 02, 0, 3),
     barsize=Dates.Minute(1),
-    verbosity=Backtest.NOVERBOSITY,
+    verbosity=Backtest.INFO,
     datadelay=Dates.Second(5),
+    orderackdelay=Dates.Second(3),
+    datetimecol="Opened",
+    opencol="Open",
+    highcol="High",
+    lowcol="Low",
+    closecol="Close",
+    volumecol="Volume",
     ondataevent=ondata,
-    onorderevent=onorder
+    onorderevent=onorder,
+    principal=1000
   )
 
   ## Run the backtest ##
