@@ -15,6 +15,12 @@ version = "0.1.0"
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
+[[BenchmarkTools]]
+deps = ["JSON", "Logging", "Printf", "Statistics", "UUIDs"]
+git-tree-sha1 = "9e62e66db34540a0c919d72172cc2f642ac71260"
+uuid = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+version = "0.5.0"
+
 [[CSV]]
 deps = ["CategoricalArrays", "DataFrames", "Dates", "FilePathsBase", "Mmap", "Parsers", "PooledArrays", "Tables", "Unicode", "WeakRefStrings"]
 git-tree-sha1 = "52a8e60c7822f53d57e4403b7f2811e7e1bdd32b"
@@ -91,6 +97,7 @@ uuid = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
 version = "0.1.0"
 
 [[Events]]
+deps = ["Dates", "Ids", "Orders"]
 path = "../src/Events"
 uuid = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
 version = "0.1.0"
@@ -291,6 +298,12 @@ uuid = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [[Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
+
+[[Utils]]
+deps = ["Backtest"]
+path = "../src/Utils"
+uuid = "b1e8bbad-889e-4512-a8f1-d954cea238f8"
+version = "0.1.0"
 
 [[WeakRefStrings]]
 deps = ["DataAPI", "Random", "Test"]

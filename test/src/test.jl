@@ -2,13 +2,15 @@ module test
 
 using Random
 using Dates
+using BenchmarkTools: @benchmark
 using Ids: AssetId
 using Engine: CalcLattice, addfields!, newbar!
-using ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore, Rank
+using ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore, Rank, Returns, LogReturns
 using Events: FieldCompletedProcessingEvent, AbstractOrderEvent
 using DataReaders: InMemoryDataReader
-using Backtest
 using Orders: MarketOrder, LimitOrder
+using Backtest: Strategy, StrategyOptions, run, order!, log, INFO, TRANSACTIONS
+using Utils: crossover, crossunder
 
 
 function enginetest()
@@ -80,11 +82,10 @@ function getexamplecryptodatareader(symbol::String)
 end
 
 function datareadertest()
+  # Test that this doesn't error out.
   getexamplecryptodatareader("BTCUSDT")
   getexamplecryptodatareader("LTCUSDT")
   getexamplecryptodatareader("ETHUSDT")
-
-  # should yield a large dataframe with appended sub dataframes
 end
 
 function bttest()
@@ -96,54 +97,54 @@ function bttest()
   end
 
   ## Make the field operations ##
-  (o, h, l, c, v) = ("Open", "High", "Low", "Close", "Volume")
-  fieldoperations = Vector([
-    Open(o),
-    High(h),
-    Low(l),
-    Close(c),
-    Volume(v),
-    SMA("SMA2-Open", o, 2),
-    SMA("SMA3-Close", c, 3),
-    ZScore("ZScore-Open", o),
-    Rank("Rank-Close", c)
-  ])
+  (dt, o, h, l, c, v) = ("Opened", "Open", "High", "Low", "Close", "Volume")
+  fieldoperations = [
+    SMA("SMA30-Close", c, 30),
+    SMA("SMA60-Close", c, 60),
+    # ZScore("ZScore-Open", o),
+    # Rank("Rank-Close", c),
+    # Returns("Returns-Close", c),
+    # Returns("Returns-Close-3", c, 3),
+    # LogReturns("LogReturns-Close", c),
+    # LogReturns("LogReturns-Close-3", c, 3),
+  ]
 
-  ## Set strategy options (doesn't have to be this verbose irl)##
-  function ondata(strat::Backtest.Strategy, event::FieldCompletedProcessingEvent)
-    # Backtest.log(strat, "just received data for the previous bar; placing an order of 1 litecoin", Backtest.NOVERBOSITY)
-    # Backtest.order!(strat, MarketOrder("LTCUSDT", 1))
-    Backtest.order!(strat, LimitOrder("LTCUSDT", -1, 10))
+  function ondata(strat::Strategy, event::FieldCompletedProcessingEvent)
+    # order!(strat, MarketOrder("LTCUSDT", 1))
+    # order!(strat, LimitOrder("LTCUSDT", -1, 10))
+    fast, slow = "SMA30-Close", "SMA60-Close"
+    if crossover(strat, "LTCUSDT", fast, slow)
+      order!(strat, MarketOrder("LTCUSDT", 5))
+    elseif crossunder(strat, "LTCUSDT", fast, slow)
+      order!(strat, MarketOrder("LTCUSDT", -5))
+    end
+
   end
-  function onorder(strat::Backtest.Strategy, event::ET) where {ET<:AbstractOrderEvent}
-    println(event)
-    println(strat.portfolio)
+  function onorder(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
   end
-  stratoptions = Backtest.StrategyOptions(
+  stratoptions = StrategyOptions(
     datareaders=datareaders,
     fieldoperations=fieldoperations,
-    numlookbackbars=-1,
+    numlookbackbars=65,
     start=Dates.DateTime(2019, 06, 02, 0, 0),
-    endtime=Dates.DateTime(2019, 06, 02, 0, 3),
+    endtime=Dates.DateTime(2019, 06, 3, 0, 0),
     barsize=Dates.Minute(1),
-    verbosity=Backtest.INFO,
+    verbosity=TRANSACTIONS,
     datadelay=Dates.Second(5),
-    orderackdelay=Dates.Second(3),
-    datetimecol="Opened",
-    opencol="Open",
-    highcol="High",
-    lowcol="Low",
-    closecol="Close",
-    volumecol="Volume",
+    messagelatency=Dates.Second(3),
+    datetimecol=dt,
+    opencol=o,
+    highcol=h,
+    lowcol=l,
+    closecol=c,
+    volumecol=v,
     ondataevent=ondata,
     onorderevent=onorder,
-    principal=1000
+    principal=1_000
   )
 
   ## Run the backtest ##
-  @time begin
-  Backtest.run(stratoptions)
-  end
+  @time run(stratoptions)
 
 end
 

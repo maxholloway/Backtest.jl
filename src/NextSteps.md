@@ -24,11 +24,3 @@ that step when the strategy is running.
 
 #### Q: How do we provide options to the backtest that handle slippage, transaction cost, and capital?
 A: There will be an abstract type called `AbstractBrokerOptions` that __must__ contain all basic info about the brokerage (e.g. initial capital, slippage model, and transaction cost model). Then certain concrete types can implement this interface, and also add other options for the particular asset type. For now, we only will have the basics wrapped in an `EquityBrokerOptions` compound type.
-
-
-## Add Optimization and Different Sampling Techniques
-1. Use a train-validation-test style to organize a training, optimization, then testing step. This is particularly important if ML is to be used.
-2. Suppose we are interested in seeing how a strategy performs over many 2-week intervals. This is pretty common, right? Making a system that partitions the datasets and then performs sub-tests on each partition (e.g. partitions a year of data into 26 2-week intervals). This form of testing has the following perks:
-  1. It allows for a tighter confidence interval around performance. In general, we aren't trying to find a strategy that will perform incredibly over a 5 year period. While that would be nice, there just isn't enough data to form a solid confidence interval around how this algo would perform when deployed (you only have probably one relevant 5-year sample). Thus, it is clear that there is a trade-off between long-term testing and test confidence. That is, if a test is longer, then we cannot partition our data into as many sub-tests, and thus cannot form a confidence interval for our mean performance (or do any analysis of our sub-test results distribution of outcomes).
-  2. Speed. Since all of the sub-tests are run independently of each other (and each would presumably take some time), we could run them in parallel. For example, if you have 8 CPU cores, you may be able to run the tests in just over 1/8 the time. That would be nice!
-  3. Easy integration with optimization. In the process of making this feature, we would also create generic code for partitioning a dataset by `DateTime`. Once this is in place, we can seamlessly use the partitioning functionality to make a `train-validation-test` partitioning of our dataset.
