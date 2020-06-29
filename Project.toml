@@ -4,16 +4,8 @@ authors = ["Max Holloway"]
 version = "0.1.0"
 
 [deps]
-CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-Engine = "fb6fdaa7-20c9-4f83-b92a-6e2bc1e23109"
-Events = "b1e9ffa3-7bae-4ba5-b468-2c00e0bbb2c5"
-Exceptions = "ce3d6ca4-e3ea-45b5-9779-61b7b5e9aa95"
-NamedArrays = "86f7a689-2022-50b4-a561-43c23ac3c673"
-Orders = "ddedc895-b71f-4a47-a77d-70e2d2880d2c"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
-UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [compat]
 julia = "1"

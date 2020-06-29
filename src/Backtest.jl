@@ -1,39 +1,637 @@
-# module Ids
-#   const AssetId = String
-#   const FieldId = String
-#   const OrderId = String
-#
-#   # Basic type definitions #
-#   # abstract type Id end
-#   #
-#   # struct AssetId <: Id
-#   #   id::String
-#   # end
-#   #
-#   # struct FieldId <: Id
-#   #   id::String
-#   # end
-#
-#   # convert(::Type{FieldId}, id::String) = FieldId(id)
-#   # convert(::Type{AssetId}, id::String) = Assetid(id)
-#   # convert(::Type{String}, id::T) where {T<:Id} = id.id
-#
-# end # module
-
-
 module Backtest
+  module Ids
+    const AssetId = String
+    const FieldId = String
+    const OrderId = String
+  end # module
+
+  module Exceptions
+    using Dates
+    using ..Ids: AssetId
+
+    struct AbstractMethodError <: Exception
+      msg::String
+      AbstractMethodError(cls::Type, method::Function) = new(
+        string("Cannot run  method ", method, " with abstract class ", cls, ".")
+      )
+    end
+
+
+    struct DateTooEarlyError <: Exception
+      msg::String
+      function DateTooEarlyError(requestedtime::T, assetid::AssetId ) where {T<:Dates.TimeType}
+        return new( string("The requested time, ", requestedtime, ", is before the first time", " in ", assetid, "."))
+      end
+    end
+
+    struct DateTooFarOutError <: Exception
+      msg::String
+      DateTooFarOutError(requestedtime::T, assetid::AssetId) where {T<:Dates.TimeType} = new(
+        string("There is not enough data in ", assetid, " to access ", requestedtime, ".")
+      )
+    end
+
+    function _test()
+      try
+        # throw(AbstractMethodError(AbstractString, print))
+        throw(DateTooFarOutError(Dates.DateTime(2020), "~~datareader~~"))
+      catch e
+        if isa(e, DateTooFarOutError)
+          println("It's ok!")
+        else
+          println(println(typeof(e)))
+        end
+      end
+    end
+  end # module
+
+  module AbstractFields
+    using ..Ids: AssetId, FieldId
+
+    """
+      `AbstractFieldOperation` is the mother of all field operations.
+      Required subtypes:
+      1. name: fieldid; type: FieldId; description: the name of the field!
+    """
+    abstract type AbstractFieldOperation end
+
+    """
+      `AbstractGenesisFieldOperation` is the type of a field operation
+      that relies on no other data. This can be thought of as an identity
+      operation, since there is actually no operation applied to the data
+      in this field. This FieldOperation is used for data that is generated
+      from outside of the backtest, such as market data.
+
+      Required subtypes:
+      1. All subtypes for `AbstractFieldOperation`.
+    """
+    abstract type AbstractGenesisFieldOperation <: AbstractFieldOperation end
+
+    """
+      `AbstractDownstreamFieldOperation` is the type shared by all field operations
+      that depend on upstream data before being calculated. An example of this would
+      be any window or cross sectional field operation, since they depend on some other
+      source of data to exist before they can be calculated.
+
+      Required subtypes:
+      1. All subtypes needed for `AbstractFieldOperation`.
+      2. name: `upstreamfieldid`; type: FieldId; description: field id associated with the upstream dependency
+    """
+    abstract type AbstractDownstreamFieldOperation <: AbstractFieldOperation end
+
+    """
+      `AbstractWindowFieldOperation` is the mother of all concrete WindowFieldOperation
+      types. All child types are expected to have an integer `window` subtype.
+
+      Required subtypes:
+      1. All subtypes required by `AbstractDownstreamFieldOperation`.
+      2. name: `window`; type: Integer; description: number of bars of data over which to make the calculation.
+    """
+    abstract type AbstractWindowFieldOperation <: AbstractDownstreamFieldOperation end
+
+    function dofieldop(windowfieldoperation::AbstractWindowFieldOperation, data::Vector)
+      throw(Exceptions.AbstractMethodError(AbstractWindowFieldOperation, dofieldop))
+    end
+
+    """
+      `AbstractCrossSectionalFieldOperation` is the mother of all concrete
+      CrossSectionalFieldOperation types.
+
+      Required subtypes:
+      1. All subtypes needed for `AbstractDownstreamFieldOperation`.
+    """
+    abstract type AbstractCrossSectionalFieldOperation <: AbstractDownstreamFieldOperation end
+
+    function dofieldop(abstractcrosssectionalfieldoperation::AbstractCrossSectionalFieldOperation, data::Dict{AssetId, Any})::Dict{AssetId, Any}
+      throw(AbstractWindowFieldOperation(AbstractCrossSectionalFieldOperation, dofieldop))
+    end
+
+    export AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
+  end # module
+
+  module ConcreteFields
+    using ..Ids: AssetId, FieldId
+    using ..AbstractFields: AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
+    using Statistics
+    using NamedArrays
+
+
+    ## Common genesis field operations ##
+    struct Open <: AbstractGenesisFieldOperation
+      fieldid::FieldId
+      Open()=new(FieldId("Open"))
+      Open(fieldid::FieldId) = new(fieldid)
+    end
+
+    struct High <: AbstractGenesisFieldOperation
+      fieldid::FieldId
+      High()=new(FieldId("High"))
+      High(fieldid::FieldId) = new(fieldid)
+    end
+
+    struct Low <: AbstractGenesisFieldOperation
+      fieldid::FieldId
+      Low()=new(FieldId("Low"))
+      Low(fieldid::FieldId) = new(fieldid)
+    end
+
+    struct Close <: AbstractGenesisFieldOperation
+      fieldid::FieldId
+      Close()=new(FieldId("Close"))
+      Close(fieldid::FieldId) = new(fieldid)
+    end
+
+    struct Volume <: AbstractGenesisFieldOperation
+      fieldid::FieldId
+      Volume()=new(FieldId("Volume"))
+      Volume(fieldid::FieldId) = new(fieldid)
+    end
+
+    ## Common window field operations ##
+    struct Returns <: AbstractWindowFieldOperation
+      fieldid::FieldId
+      upstreamfieldid::FieldId
+      window::Integer
+    end
+    Returns(fieldid::FieldId, upstreamfieldid::FieldId) = Returns(fieldid, upstreamfieldid, 2)
+    function dofieldop(returnsfieldop::Returns, data::Vector{T}) where {T<:Number}
+      if length(data) < returnsfieldop.window
+        return missing
+      else
+        return (data[returnsfieldop.window]-data[1])/data[1]
+      end
+    end
+
+
+    struct LogReturns <: AbstractWindowFieldOperation
+      fieldid::FieldId
+      upstreamfieldid::FieldId
+      window::Integer
+    end
+    LogReturns(fieldid::FieldId, upstreamfieldid::FieldId) = LogReturns(fieldid, upstreamfieldid, 2)
+    function dofieldop(logreturnsfieldop::LogReturns, data::Vector{T}) where {T<:Number}
+      if length(data) < logreturnsfieldop.window
+        return missing
+      else
+        return log(data[logreturnsfieldop.window]/data[1])
+      end
+    end
+
+    struct SMA <: AbstractWindowFieldOperation
+      fieldid::FieldId
+      upstreamfieldid::FieldId
+      window::Integer
+    end
+    function dofieldop(windowfieldoperation::SMA, data::Vector{T}) where {T<:Number}
+      return sum(data)/length(data)
+    end
+
+
+    ## Common cross sectional field operations ##
+    struct ZScore <: AbstractCrossSectionalFieldOperation
+      fieldid::FieldId
+      upstreamfieldid::FieldId
+    end
+    function dofieldop(crosssectionalfieldoperation::ZScore, assetdata::NamedArray)::NamedArray
+      mu = mean(assetdata)
+      sigma = std(assetdata)
+      for i in 1:length(assetdata)
+        assetdata[i] = (assetdata[i]-mu)/sigma
+      end
+      return assetdata
+    end
+
+
+    struct Rank <: AbstractCrossSectionalFieldOperation
+      fieldid::FieldId
+      upstreamfieldid::FieldId
+    end
+    function dofieldop(crosssectionalfieldoperation::Rank, assetdata::NamedArray)::NamedArray
+      result = NamedArray(Vector{Union{Integer, Nothing}}(nothing, length(assetdata)), names(assetdata, 1))
+      sort!(assetdata, rev=true)
+      for (i, assetid) in enumerate(names(assetdata, 1))
+        result[assetid] = i
+      end
+      return result
+    end
+  end # module
+
+  module DataReaders
+    using Dates
+    using CSV: read
+    using DataFrames: DataFrame, nrow
+    using ..Exceptions
+    using ..Ids: AssetId, FieldId
+
+    abstract type AbstractDataReader end
+    function fastforward!(datareader::AbstractDataReader, time::T) where {T<:Dates.TimeType}
+      """Function that moves datareader forward until the current
+      bar is at or after `time`. This is part of the AbstractDataReader
+      interface."""
+      throw(Exceptions.AbstractMethodError(AbstractDataReader, fastforward!))
+    end
+
+    mutable struct InMemoryDataReader <: AbstractDataReader
+      """Stores all asset data in memory."""
+      assetid::AssetId
+      data::DataFrame
+    end
+    function InMemoryDataReader(assetid::String, sources::Vector{S};
+                                datetimecol::String="datetime",
+                                dtfmt::String="yyyy-mm-dd HH:MM:SS",
+                                delim::Char=',') where {S<:AbstractString}
+      """Multi-datasource constructor."""
+      if length(sources) == 0
+        throw("`sources` must have at least one element.")
+      end
+
+      # Read first source, then append all others to the first.
+      alldata = read(sources[1], delim=delim, copycols=true)
+      for i = 2:length(sources)
+        otherdf = append!(alldata, DataFrame(read(sources[i], delim=delim), copycols=true))
+      end
+
+      # Convert the datetime column
+      alldata[!, datetimecol] = Dates.DateTime.(alldata[:, datetimecol], Dates.DateFormat(dtfmt))
+      return InMemoryDataReader(assetid, alldata)
+    end
+    InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-dd HH:MM:SS", delim::Char=',') =
+      InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
+
+    function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:Dates.TimeType}
+      if nrow(datareader.data) == 0
+        throw("`DataReader` has no data.")
+      elseif datareader.data[1, 1] > time
+        throw(Exceptions.DateTooEarlyError(time, datareader.assetid))
+      end
+      while nrow(datareader.data) > 0 && datareader.data[1, 1] < time # NOTE: ASSUMES DATETIME IS THE FIRST COLUMN
+        datareader.data = datareader.data[2:nrow(datareader.data), :]
+      end
+
+      if nrow(datareader.data) == 0
+        throw(Exceptions.DateTooFarOutError(time, datareader.assetid))
+      end
+    end
+
+    function peek(datareader::InMemoryDataReader)::Dict{FieldId, Any}
+      toprow::NamedTuple = copy(datareader.data[1, :])
+      fieldtovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
+      for kvpair in zip(fieldnames(typeof(toprow)), toprow)
+        fieldtovalues[string(kvpair[1])] = kvpair[2]
+      end
+      return fieldtovalues
+    end
+
+    function popfirst!(datareader::InMemoryDataReader)::Dict{FieldId, Any}
+      fieldtovalues = peek(datareader)
+      delete!(datareader.data, 1)
+      return fieldtovalues
+    end
+  end # module
+
+  module Engine
+    using NamedArrays: NamedArray
+    using ..Ids: AssetId, FieldId
+    using ..AbstractFields: AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
+    using ..ConcreteFields: dofieldop
+    ## BarLayer definition and related functions ##
+    struct BarLayer
+      bardata::NamedArray{T, 2} where {T<:Any}
+    end
+
+    function BarLayer(assetids::Vector{AssetId}, fieldids::Vector{FieldId})
+      unnamedarray = Array{Any, 2}(undef, length(assetids), length(fieldids))
+      return BarLayer(NamedArray(unnamedarray, (assetids, fieldids)))
+    end
+
+    function getvalue(barlayer::BarLayer, assetid::AssetId, fieldid::FieldId)
+      return barlayer.bardata[assetid, fieldid]
+    end
+
+    function insertvalue!(barlayer::BarLayer, assetid::AssetId, fieldid::FieldId, value)
+      barlayer.bardata[assetid, fieldid] = value
+    end
+
+    function getallvalues(barlayer::BarLayer)
+      return barlayer.bardata
+    end
+
+    ## Counter definition (util) and related functions ##
+    struct Counter{T}
+      data::Dict{T, Integer}
+      Counter{T}() where {T <: Any} = new{T}(Dict{T, Integer}())
+    end
+
+    function hitcounter!(counter::Counter, key)
+      # NOTE: Consider placing a lock here to make counter thread-safe
+      if !haskey(counter.data, key)
+        counter.data[key] = 0
+      end
+      counter.data[key] += 1;
+    end
+
+    function getcount(counter::Counter, key)
+      # NOTE: Consider placing a lock here to make counter thread-safe
+      return counter.data[key]
+    end
+
+    ## CalcLattice definition and related methods ##
+    export CalcLattice
+    mutable struct CalcLattice
+      # Attributes that remain constant
+      assetids::Vector{AssetId}
+      fieldids::Vector{FieldId} # TODO: consider making a CalcLatticeFieldInfo struct that's created before CalcLattice
+      numbarsstored::Integer
+
+      # Attributes maintaining storage and access of bars
+      recentbars::Vector{BarLayer} # most recent -> least recent
+      curbarindex::Integer
+
+      # Attributes that change when new bar propagation occurs
+      numcompletedassets::Counter{FieldId}
+
+      # Attributes changed when fields are added
+      windowdependentfields::Dict{FieldId, Set{FieldId}}
+      crosssectionaldependentfields::Dict{FieldId, Set{FieldId}}
+      fieldids_to_ops::Dict{FieldId, AbstractFieldOperation}
+      genesisfieldids::Set{FieldId}
+    end
+
+    function CalcLattice(nbarsstored::Integer, assetids::Vector{AssetId})::CalcLattice
+      return CalcLattice(
+        assetids,             # asset ids
+        Vector{FieldId}(),        # field ids
+        nbarsstored,          # num bars stored; if -1, then store all bars
+        Array{BarLayer, 1}(undef, 0), # recent bars
+        0,                # initialize curbarindex (one too small, since incrementing occurs on newbar addition)
+        Counter{FieldId}(),       # number of completed assets for each field on this bar
+        Dict{FieldId, Set{FieldId}}(),  # window dependent fields
+        Dict{FieldId, Set{FieldId}}(),  # cross sectional dependent fields
+        Dict{FieldId, AbstractFieldOperation}(),     # field ids to field ops
+        Set()               # genesis field ids
+      )
+    end
+
+    function getnbaragodata(lattice::CalcLattice, ago::Integer)::BarLayer
+      if (ago > length(lattice.recentbars)) || (ago < 0) || ((lattice.numbarsstored!=-1) && (ago > lattice.numbarsstored))
+        throw(string("Invalid `ago`: ", ago, " while lattice is only on the ", lattice.curbarindex, " index."))
+      end
+      mostrecentbarindex = length(lattice.recentbars)
+      return lattice.recentbars[mostrecentbarindex-ago]
+    end
+
+    function getcurrentbar(lattice::CalcLattice)::BarLayer
+      return getnbaragodata(lattice, 0)
+    end
+
+    function updatebars!(lattice::CalcLattice)
+      if (lattice.numbarsstored!=-1) && (length(lattice.recentbars) >= lattice.numbarsstored)
+        deleteat!(lattice.recentbars, 1) # delete least recent bar
+      end
+
+      barlayer = BarLayer(lattice.assetids, lattice.fieldids)
+      push!(lattice.recentbars, barlayer)
+    end
+
+    function insertnode!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId, value)
+      currentbar = getcurrentbar(lattice)
+      # TODO: Add functionality to check if this value already exists
+      hitcounter!(lattice.numcompletedassets, fieldid)
+      insertvalue!(currentbar, assetid, fieldid, value)
+    end
+
+    function getwindowdata(lattice::CalcLattice, windowfieldoperation::AbstractWindowFieldOperation, assetid::AssetId)::Vector
+      # Get information about the operation
+      upstreamfieldid = windowfieldoperation.upstreamfieldid
+      window = windowfieldoperation.window
+      inputdatatype = typeof( getvalue(lattice.recentbars[1], assetid, upstreamfieldid) )
+
+      # Set looping parameters
+      numdefinedentries = length(lattice.recentbars)
+      lower = max(1, numdefinedentries-window+1)
+      upper = numdefinedentries
+
+      # Fill window data
+      windowdata = Vector{inputdatatype}(undef, upper-lower+1)
+      for i in lower:upper
+        value = getvalue(lattice.recentbars[i], assetid, upstreamfieldid)
+        windowdata[i-lower+1] = value
+      end
+      return windowdata
+    end
+
+    function compute!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
+      """Computes a window operation node.
+      """
+      windowfieldoperation = lattice.fieldids_to_ops[fieldid]
+      # Get data for the window operation (time is the free variable)
+      windowdata = getwindowdata(lattice, windowfieldoperation, assetid)
+
+      # Perform the window operation
+      value = dofieldop(windowfieldoperation, windowdata)
+      # println("Finished `dofieldop`!")
+      # Set value for this node
+      insertnode!(lattice, assetid, fieldid, value)
+    end
+
+    function getcrosssectionaldata(lattice::CalcLattice, crosssectionalfieldoperation::AbstractCrossSectionalFieldOperation)::NamedArray
+      upstreamfieldid = crosssectionalfieldoperation.upstreamfieldid
+      currentbar = getcurrentbar(lattice)
+      emptyassets = Vector(undef, length(lattice.assetids))
+      assetdata = NamedArray(emptyassets, lattice.assetids)
+      for assetid in lattice.assetids
+        assetdata[assetid] = getvalue(currentbar, assetid, upstreamfieldid)
+      end
+      return assetdata
+    end
+
+    function compute!(lattice::CalcLattice, fieldid::FieldId)
+      """Computes the node for all of the assetes of a cross sectional field.
+      """
+      crosssectionalfieldoperation = lattice.fieldids_to_ops[fieldid]
+      # Get data for the cross sectional operation (asset is the free variable)
+      assetdata = getcrosssectionaldata(lattice, crosssectionalfieldoperation)
+
+      # Perform the cross sectional operation
+      asset_results::NamedArray = dofieldop(crosssectionalfieldoperation, assetdata)
+
+      # Set value for all assets on this bar and field
+      for assetid in lattice.assetids
+        insertnode!(lattice, assetid, fieldid, asset_results[assetid])
+      end
+    end
+
+    function propagate!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
+      """Given that this node has a value already, propagate forward
+      through its dependent nodes.
+      """
+
+      # Propagate over all window fields that depend on this field
+      if haskey(lattice.windowdependentfields, fieldid)
+        for windowdependentfieldid in lattice.windowdependentfields[fieldid]
+          compute!(lattice, assetid, windowdependentfieldid)
+          propagate!(lattice, assetid, windowdependentfieldid)
+        end
+      end
+
+      # Propagate over all cross sectional fields that depend on this field
+      hascrosssectionaldependencies = haskey(lattice.crosssectionaldependentfields, fieldid)
+      allassetscompleted = (getcount(lattice.numcompletedassets, fieldid) == length(lattice.assetids))
+      if hascrosssectionaldependencies && allassetscompleted
+        for crosssectionaldependentfieldid in lattice.crosssectionaldependentfields[fieldid]
+          compute!(lattice, crosssectionaldependentfieldid)
+          for assetid_ in lattice.assetids
+            propagate!(lattice, assetid_, crosssectionaldependentfieldid)
+          end
+        end
+      end
+
+    end
+
+    # Interface functions
+    export newbar!, addfield!
+    function newbar!(lattice::CalcLattice, newbardata::Dict{AssetId, Dict{FieldId, T}}) where {T}
+
+      lattice.numcompletedassets = Counter{FieldId}()
+      lattice.curbarindex += 1
+      updatebars!(lattice)
+      for assetid in keys(newbardata)
+        for fieldid in lattice.genesisfieldids
+          value = newbardata[assetid][fieldid]
+          insertnode!(lattice, assetid, fieldid, value)
+          propagate!(lattice, assetid, fieldid)
+        end
+      end
+    end
+
+    function addfield!(lattice::CalcLattice, newfieldoperation::AbstractFieldOperation)
+      if lattice.curbarindex != 0
+        throw("Cannot add a field after bar data has been added.")
+      end
+
+      if newfieldoperation.fieldid in lattice.fieldids
+        throw("Cannot have two fields with the same `fieldid`!")
+      end
+
+      function appendtodict!(dict::Dict{FieldId, Set{FieldId}}, key::FieldId, value::FieldId)
+        if !(key in keys(dict))
+          dict[key] = Set()
+        end
+        push!(dict[key], value)
+      end
+
+      push!(lattice.fieldids, newfieldoperation.fieldid)
+
+      # Add the upstreamfieldid -> fieldid relationship
+      if isa(newfieldoperation, AbstractGenesisFieldOperation)
+        push!(lattice.genesisfieldids, newfieldoperation.fieldid)
+      elseif isa(newfieldoperation, AbstractWindowFieldOperation)
+        appendtodict!(lattice.windowdependentfields, newfieldoperation.upstreamfieldid, newfieldoperation.fieldid)
+      elseif isa(newfieldoperation, AbstractCrossSectionalFieldOperation)
+        appendtodict!(lattice.crosssectionaldependentfields, newfieldoperation.upstreamfieldid, newfieldoperation.fieldid)
+      else
+        throw("Currently, the only supported field operations are subtypes of `AbstractGenesisFieldOperation`, `AbstractWindowFieldOperation`, or `AbstractCrossSectionalFieldOperation`.")
+      end
+      lattice.fieldids_to_ops[newfieldoperation.fieldid] = newfieldoperation
+    end
+
+    function addfields!(lattice::CalcLattice, newfieldoperations::Vector{<:AbstractFieldOperation})
+      for newfieldoperation in newfieldoperations
+        addfield!(lattice, newfieldoperation)
+      end
+    end
+  end # module
+
+  module Orders
+    using ..Ids: AssetId
+
+    abstract type AbstractOrder end
+
+    struct MarketOrder <: AbstractOrder
+      assetid::AssetId
+      size::NT where {NT<:Number}
+    end
+
+    struct LimitOrder <: AbstractOrder
+      assetid::AssetId
+      size::ST where {ST<:Number}
+      extremum::ET where {ET<:Number}
+    end
+  end # module
+
+  module Events
+    using Dates: TimeType
+    using ..Ids: AssetId, FieldId, OrderId
+    using ..Orders: AbstractOrder
+
+    # Event definitions #
+    """ `AbstractEvent` is the ancestor to all concrete events.
+    Required subtypes:
+    1. name: time; type: datetime; description: the time at which the event should be fired (with respect to the time of the backtest, not the real datetime)
+    """
+    abstract type AbstractEvent end
+
+    struct NewBarEvent <: AbstractEvent
+      time::T where {T<:TimeType}
+      genesisdata::Dict{AssetId, Dict{FieldId, A}} where {A<:Any}
+    end
+
+    struct FieldCompletedProcessingEvent <: AbstractEvent
+      time::T where {T<:TimeType}
+    end
+
+    abstract type AbstractOrderEvent <: AbstractEvent end
+
+    struct OrderAckEvent <: AbstractOrderEvent
+      time::T where {T<:TimeType} # when the ack is received on our end
+      orderid::String
+    end
+
+    struct OrderFillEvent <: AbstractOrderEvent
+      time::T where {T<:TimeType} # when the ack is received on our end
+      order::O where {O<:AbstractOrder}
+      deltacash::Number # change in cash as a result of this order being filled
+      deltaequity::Number # change in our equity in this asset
+    end
+
+    # Event queue type and related definitions #
+    struct EventQueue
+      events::Vector{T} where {T<:AbstractEvent} # all events, stored in chronological order (closest in the future -> furthest in the future)
+      EventQueue() = new(Vector{AbstractEvent}(undef, 0))
+    end
+
+    function peek(eventq::EventQueue)
+      return eventq.events[1]
+    end
+
+    function pop!(eventq::EventQueue)
+      return popfirst!(eventq.events)
+    end
+
+    function push!(eventq::EventQueue, event::T) where {T<:AbstractEvent}
+      index = searchsortedfirst(eventq.events, event, by=(event->event.time))
+      insert!(eventq.events, index, event)
+    end
+
+    function empty(eventq::EventQueue)
+      return length(eventq.events) == 0
+    end
+  end # module
+
+  ## Imports
   using Dates: DateTime, TimeType
   using Dates
   using UUIDs: uuid4
   using NamedArrays: NamedArray
-  using Ids: AssetId, FieldId, OrderId
-  using AbstractFields: AbstractFieldOperation
-  using ConcreteFields: Open, High, Low, Close, Volume
-  using Events: EventQueue, AbstractEvent, NewBarEvent, FieldCompletedProcessingEvent, OrderFillEvent, AbstractOrderEvent, OrderAckEvent
-  using Events
-  using Orders
-  using Engine: CalcLattice, addfields!, newbar!
-  using DataReaders: AbstractDataReader, fastforward!, popfirst!, peek
+  using .Ids: AssetId, FieldId, OrderId
+  using .AbstractFields: AbstractFieldOperation
+  using .ConcreteFields: Open, High, Low, Close, Volume
+  using .Events: EventQueue, AbstractEvent, NewBarEvent, FieldCompletedProcessingEvent, OrderFillEvent, AbstractOrderEvent, OrderAckEvent
+  using .Events
+  using .Orders
+  using .Engine: CalcLattice, addfields!, newbar!
+  using .DataReaders: AbstractDataReader, fastforward!, popfirst!, peek
 
   ## Verbosity Levels ##
   abstract type AbstractVerbosity end
