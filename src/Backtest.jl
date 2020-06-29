@@ -620,7 +620,7 @@ module Backtest
   end # module
 
   ## Imports
-  using Dates: DateTime, TimeType
+  using Dates: DateTime, TimeType, Minute, Millisecond
   using Dates
   using UUIDs: uuid4
   using NamedArrays: NamedArray
@@ -648,7 +648,7 @@ module Backtest
     numlookbackbars::Integer
     start::ST where {ST<:Dates.TimeType}
     endtime::ET where {ET<:Dates.TimeType}
-    barsize::BT where {BT<:Dates.Period}
+    tradinginterval::TTI where {TTI<:Dates.Period}
     verbosity::DataType
     datadelay::DDT where {DDT<:Dates.Period}
     messagelatency::ODT where {ODT<:Dates.Period}
@@ -668,10 +668,10 @@ module Backtest
                           start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
                           endtime::ET,                    # end time for the backtest
                           numlookbackbars::Integer=-1,    # number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
-                          barsize::BT=Day(1),             # how much time there is between the start of two consecutive bars; TODO: how does this work for data with gaps?
-                          verbosity::Type=NOVERBOSITY,    # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
-                          datadelay::DDT=Dates.Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
-                          messagelatency::ODT=Dates.Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
+                          tradinginterval::TTI=Minute(390), # how much time there is between the start of two consecutive bars
+                          verbosity::Type=NOVERBOSITY,     # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
+                          datadelay::DDT=Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
+                          messagelatency::ODT=Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
                           datetimecol::String="datetime", # name of datetime column
                           opencol::String="open",         # name of open column
                           highcol::String="high",         # name of high column
@@ -682,10 +682,10 @@ module Backtest
                           onorderevent::Function=(orderevent->nothing), # user-defined function that performs logic when an order event is received
                           principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
                           ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
-                          ST<:Dates.TimeType, ET<:Dates.TimeType, BT<:Dates.TimePeriod,
+                          ST<:Dates.TimeType, ET<:Dates.TimeType, TTI<:Dates.TimePeriod,
                           DDT<:Dates.Period, ODT<:Dates.Period, PT<:Number }
     return StrategyOptions(datareaders, fieldoperations, numlookbackbars,
-      start, endtime, barsize, verbosity, datadelay, messagelatency, datetimecol,
+      start, endtime, tradinginterval, verbosity, datadelay, messagelatency, datetimecol,
       opencol, highcol, lowcol, closecol, volumecol,  ondataevent, onorderevent,
       principal
     )
@@ -706,6 +706,7 @@ module Backtest
     assetids::Vector{AssetId}
     portfolio::Portfolio
     lattice::CalcLattice
+    curbarstarttime::DateTime
     curtime::DateTime
     curbarindex::Integer
   end
@@ -733,6 +734,7 @@ module Backtest
       assetids,
       Portfolio(options.principal),
       lattice,
+      options.start,
       options.start,
       0
     )
@@ -766,7 +768,7 @@ module Backtest
 
   function data(strat::Strategy)::NamedArray
     """Gets (assetid, fieldid)->value pairs for the previous bar.
-    For example, if the barsize is 1 minute, and the current time
+    For example, if the time between bars is 1 minute, and the current time
     is 11:33:25 (HH:MM:SS), then this would give OHLCV data from
     11:32:00-11:32:59.999... . WE CANNOT ACCESS DATA FOR THE CURRENT BAR,
     SINCE IT IS NOT COMPLETED YET (e.g. cannot access this bar's open price)."""
@@ -809,9 +811,8 @@ module Backtest
     end
   end
 
-  curbarstarttime(strat::Strategy) = strat.options.start + (strat.curbarindex - 0) * strat.options.barsize
 
-  nextbarstarttime(strat::Strategy) = curbarstarttime(strat) + strat.options.barsize
+  curbarendtime(strat::Strategy) = strat.curbarstarttime + strat.options.tradinginterval
 
   function randomtimeininterval(left::LT, right::RT) where {LT<:Dates.TimeType, RT<:Dates.TimeType}
     leftms = Dates.datetime2epochms(left)
@@ -856,8 +857,7 @@ module Backtest
   end
 
   function tryfillorder!(strat::Strategy, order::OT)::Bool where {OT<:Orders.AbstractOrder}
-    """
-    NOTE: ASSUMES THAT WE ARE TRYING TO FILL THE ORDER AT THE BEGINNING OF A BAR!"""
+    """NOTE: ASSUMES THAT WE ARE TRYING TO FILL THE ORDER AT THE BEGINNING OF A BAR!"""
 
     if order.size == 0
       throw("Cannot process an order with `size`=0.")
@@ -895,7 +895,8 @@ module Backtest
         if strat.portfolio.buyingpower + deltacash < 0
           throw(string("Tried to place order ", order, " at price ", mid, " but there is only ", strat.portfolio.buyingpower, " of cash."))
         end
-        executiontime = randomtimeininterval(strat.curtime+strat.options.messagelatency, nextbarstarttime(strat)+strat.options.messagelatency)
+        # say it executes at a random time within the bar
+        executiontime = randomtimeininterval(strat.curtime+strat.options.messagelatency, curbarendtime(strat)+strat.options.messagelatency) #
         Events.push!(strat.events, OrderFillEvent(
           executiontime,
           order,
@@ -962,7 +963,7 @@ module Backtest
 
     computationtime = realend - realstart
     timeaftercomputation = strat.curtime + computationtime
-    if timeaftercomputation > nextbarstarttime(strat)
+    if timeaftercomputation > curbarendtime(strat)
       throw(string("Lattice computations (i.e. computations on pre-defined",
       " fields) took more than the available time in the bar to compute fields."))
     end
@@ -995,7 +996,7 @@ module Backtest
 
     # Account for new bar
     strat.curbarindex += 1
-    strat.curtime = curbarstarttime(strat)
+    strat.curtime = genesisfielddata[strat.assetids[1]][strat.options.datetimecol]
 
     # Fill all of the orders for the last bar; NOTE: this works due to a weird
     # loophole from the state of the program. `runnextbar` is only invoked from
@@ -1012,7 +1013,7 @@ module Backtest
       genesisfielddata
     ))
 
-    while !Events.empty(strat.events) && Events.peek(strat.events).time < nextbarstarttime(strat)
+    while !Events.empty(strat.events) && Events.peek(strat.events).time < curbarendtime(strat)
       event = Events.pop!(strat.events)
       processevent!(strat, event)
     end
@@ -1029,14 +1030,23 @@ module Backtest
 
   function loadgenesisdata!(strat::Strategy)::Dict{AssetId, Dict{FieldId, Any}}
     # Initialize genesis field data array
+    uniquedatetimes = Set([])
     genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
     for assetid in strat.assetids
-      genesisfielddata[assetid] = popfirst!(strat.options.datareaders[assetid])
+      genesisassetfielddata = popfirst!(strat.options.datareaders[assetid])
+      datetime = genesisassetfielddata[strat.options.datetimecol]
+      union!(uniquedatetimes, [datetime])
+      # println(uniquedatetimes)
+      if length(uniquedatetimes) != 1
+        println(uniquedatetimes)
+        log(strat, "Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time.", DEBUG)
+        throw("")
+      else
+        genesisfielddata[assetid] = genesisassetfielddata
+      end
     end
     return genesisfielddata
   end
-
-  nextbarexists(strat::Strategy) = (nextbarstarttime(strat) < strat.options.endtime)
 
   function onend(strat::Strategy)
     # for ago in length(strat.lattice.recentbars)-1:-1:0
@@ -1060,7 +1070,7 @@ module Backtest
     strat = Strategy(stratoptions)
 
     # Run the strategy
-    while nextbarexists(strat)
+    while curbarendtime(strat) < strat.options.endtime
       genesisfielddata = loadgenesisdata!(strat)
       runnextbar!(strat, genesisfielddata)
     end
