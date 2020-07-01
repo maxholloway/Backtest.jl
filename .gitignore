@@ -1,5 +1,6 @@
 # Files modified in small tests
 data
+fakedata
 Untitled*.ipynb
 
 # Inner git repos used for dev
@@ -9,4 +10,3 @@ src/updaterepos.sh
 # Environment tracking
 *__pycache__*
 .ipynb_checkpoints*
-*/jenv

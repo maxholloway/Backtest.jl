@@ -108,11 +108,11 @@ using .Utils: crossover, crossunder
 # end
 #
 function getexamplecryptodatareader(symbol::String)
-  basepath = string("../../data/crypto/", symbol, "/individual_csvs")
-  daysofmonth = [lpad(i, 2, "0") for i=1:30]
-  dayofmonthtopath = (dom -> string(basepath, "/2019-06-", dom, ".csv"))
+  basepath = "../fakedata/crypto/$symbol"
+  daysofmonth = [lpad(i, 2, "0") for i=1:6]
+  dayofmonthtopath = (dom -> "$basepath/2015-07-$(dom).csv")
   sources = [dayofmonthtopath(dom) for dom in daysofmonth]
-  return InMemoryDataReader(symbol, sources, datetimecol="Opened")
+  return InMemoryDataReader(symbol, sources, datetimecol="Datetime")
 end
 
 function datareadertest()
@@ -124,14 +124,14 @@ end
 
 function bttest()
   ## Make the data readers ##
-  assetids = ["BTCUSDT", "LTCUSDT", "ETHUSDT"]
+  assetids = ["A", "B", "C"]
   datareaders = Dict{AssetId, InMemoryDataReader}()
   for assetid in assetids
     datareaders[assetid] = getexamplecryptodatareader(assetid)
   end
 
   ## Make the field operations ##
-  (dt, o, h, l, c, v) = ("Opened", "Open", "High", "Low", "Close", "Volume")
+  (dt, o, h, l, c, v) = ("Datetime", "Open", "High", "Low", "Close", "Volume")
   fieldoperations = [
     SMA("SMA30-Close", c, 30),
     SMA("SMA60-Close", c, 60),
@@ -147,10 +147,10 @@ function bttest()
     # order!(strat, MarketOrder("LTCUSDT", 1))
     # order!(strat, LimitOrder("LTCUSDT", -1, 10))
     fast, slow = "SMA30-Close", "SMA60-Close"
-    if crossover(strat, "LTCUSDT", fast, slow)
-      order!(strat, MarketOrder("LTCUSDT", 5))
-    elseif crossunder(strat, "LTCUSDT", fast, slow)
-      order!(strat, MarketOrder("LTCUSDT", -5))
+    if crossover(strat, "A", fast, slow)
+      order!(strat, MarketOrder("A", 1))
+    elseif crossunder(strat, "A", fast, slow)
+      order!(strat, MarketOrder("A", -1))
     end
   end
 
@@ -160,10 +160,10 @@ function bttest()
     datareaders=datareaders,
     fieldoperations=fieldoperations,
     numlookbackbars=60,
-    start=Dates.DateTime(2019, 08, 02, 0, 0),
-    endtime=Dates.DateTime(2019, 08, 03, 0, 0),
+    start=Dates.DateTime(2015, 7, 2, 0, 0),
+    endtime=Dates.DateTime(2015, 7, 6, 0, 0),
     tradinginterval=Dates.Minute(1),
-    verbosity=TRANSACTIONS,
+    verbosity=NOVERBOSITY,
     datadelay=Dates.Second(5),
     messagelatency=Dates.Second(3),
     datetimecol=dt,

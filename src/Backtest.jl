@@ -30,19 +30,6 @@ module Backtest
         string("There is not enough data in ", assetid, " to access ", requestedtime, ".")
       )
     end
-
-    function _test()
-      try
-        # throw(AbstractMethodError(AbstractString, print))
-        throw(DateTooFarOutError(Dates.DateTime(2020), "~~datareader~~"))
-      catch e
-        if isa(e, DateTooFarOutError)
-          println("It's ok!")
-        else
-          println(println(typeof(e)))
-        end
-      end
-    end
   end # module
 
   module AbstractFields
@@ -236,11 +223,11 @@ module Backtest
       assetid::AssetId
       data::DataFrame
     end
+
     function InMemoryDataReader(assetid::String, sources::Vector{S};
-                                datetimecol::String="datetime",
-                                dtfmt::String="yyyy-mm-dd HH:MM:SS",
-                                delim::Char=',') where {S<:AbstractString}
-      """Multi-datasource constructor."""
+                  datetimecol::String="datetime",
+                  dtfmt::String="yyyy-mm-dd HH:MM:SS",
+                  delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
       if length(sources) == 0
         throw("`sources` must have at least one element.")
       end
@@ -248,24 +235,32 @@ module Backtest
       # Read first source, then append all others to the first.
       alldata = read(sources[1], delim=delim, copycols=true)
       for i = 2:length(sources)
-        otherdf = append!(alldata, DataFrame(read(sources[i], delim=delim), copycols=true))
+        append!(alldata, DataFrame(read(sources[i], delim=delim), copycols=true))
       end
 
-      # Convert the datetime column
-      alldata[!, datetimecol] = Dates.DateTime.(alldata[:, datetimecol], Dates.DateFormat(dtfmt))
+      if size(alldata)[1] == 0
+        throw("No data was parsed!")
+      elseif isa(alldata[1, datetimecol], AbstractString)
+        alldata[!, datetimecol] = Dates.DateTime.(alldata[:, datetimecol], Dates.DateFormat(dtfmt))
+      elseif !isa(alldata[1, datetimecol], Dates.TimeType)
+        throw("The given datetime column, $datetimecol, has values with invalid type '$(typeof(alldata[1, datetimecol]))'.
+            A valid type for this column, 'T', would satisfy {T<:Union{AbstractString, Dates.TimeType}}.")
+      end
+
       return InMemoryDataReader(assetid, alldata)
     end
+
     InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
         dtfmt::String="yyyy-mm-dd HH:MM:SS", delim::Char=',') =
       InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
 
-    function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:Dates.TimeType}
+    function fastforward!(datareader::InMemoryDataReader, time::T, datetimecol::ST) where {T<:Dates.TimeType, ST<:AbstractString}
       if nrow(datareader.data) == 0
         throw("`DataReader` has no data.")
       elseif datareader.data[1, 1] > time
         throw(Exceptions.DateTooEarlyError(time, datareader.assetid))
       end
-      while nrow(datareader.data) > 0 && datareader.data[1, 1] < time # NOTE: ASSUMES DATETIME IS THE FIRST COLUMN
+      while nrow(datareader.data) > 0 && datareader.data[1, datetimecol] < time # NOTE: ASSUMES DATETIME IS THE FIRST COLUMN
         datareader.data = datareader.data[2:nrow(datareader.data), :]
       end
 
@@ -430,7 +425,7 @@ module Backtest
 
       # Perform the window operation
       value = dofieldop(windowfieldoperation, windowdata)
-      # println("Finished `dofieldop`!")
+
       # Set value for this node
       insertnode!(lattice, assetid, fieldid, value)
     end
@@ -713,7 +708,7 @@ module Backtest
   function Strategy(options::StrategyOptions)
     """User-facing constructor."""
     # Prepare the data readers
-    preparedatareaders!(options.datareaders, options.start)
+    preparedatareaders!(options.datareaders, options.start, options.datetimecol)
 
     # Prepare the lattice
     assetids = [assetid for assetid in keys(options.datareaders)]
@@ -798,7 +793,7 @@ module Backtest
     end
   end
 
-  function preparedatareaders!(datareaders::Dict{AssetId, DR}, time::DateTime) where {DR<:AbstractDataReader}
+  function preparedatareaders!(datareaders::Dict{AssetId, DR}, time::DateTime, datetimecol::DTCT) where {DR<:AbstractDataReader, DTCT<:AbstractString}
     """Fast forward each data reader, so that they're all able to read bars from
     the same starting point."""
     if length(keys(datareaders)) == 0
@@ -807,10 +802,9 @@ module Backtest
     end
 
     for assetid in keys(datareaders)
-      fastforward!(datareaders[assetid], time)
+      fastforward!(datareaders[assetid], time, datetimecol)
     end
   end
-
 
   curbarendtime(strat::Strategy) = strat.curbarstarttime + strat.options.tradinginterval
 
@@ -996,7 +990,8 @@ module Backtest
 
     # Account for new bar
     strat.curbarindex += 1
-    strat.curtime = genesisfielddata[strat.assetids[1]][strat.options.datetimecol]
+    strat.curbarstarttime = genesisfielddata[strat.assetids[1]][strat.options.datetimecol]
+    strat.curtime = strat.curbarstarttime
 
     # Fill all of the orders for the last bar; NOTE: this works due to a weird
     # loophole from the state of the program. `runnextbar` is only invoked from
@@ -1033,14 +1028,13 @@ module Backtest
     uniquedatetimes = Set([])
     genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
     for assetid in strat.assetids
+      # println(strat.options.datareaders[assetid])
       genesisassetfielddata = popfirst!(strat.options.datareaders[assetid])
       datetime = genesisassetfielddata[strat.options.datetimecol]
       union!(uniquedatetimes, [datetime])
-      # println(uniquedatetimes)
       if length(uniquedatetimes) != 1
-        println(uniquedatetimes)
-        log(strat, "Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time.", DEBUG)
-        throw("")
+        log(strat, "Error occurred. :(", DEBUG)
+        throw("Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time.")
       else
         genesisfielddata[assetid] = genesisassetfielddata
       end
