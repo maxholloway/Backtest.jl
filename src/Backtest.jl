@@ -257,10 +257,10 @@ module Backtest
     function fastforward!(datareader::InMemoryDataReader, time::T, datetimecol::ST) where {T<:Dates.TimeType, ST<:AbstractString}
       if nrow(datareader.data) == 0
         throw("`DataReader` has no data.")
-      elseif datareader.data[1, 1] > time
+      elseif datareader.data[1, datetimecol] > time
         throw(Exceptions.DateTooEarlyError(time, datareader.assetid))
       end
-      while nrow(datareader.data) > 0 && datareader.data[1, datetimecol] < time # NOTE: ASSUMES DATETIME IS THE FIRST COLUMN
+      while nrow(datareader.data) > 0 && datareader.data[1, datetimecol] < time
         datareader.data = datareader.data[2:nrow(datareader.data), :]
       end
 

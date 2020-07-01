@@ -108,8 +108,9 @@ using .Utils: crossover, crossunder
 # end
 #
 function getexamplecryptodatareader(symbol::String)
-  basepath = "../fakedata/crypto/$symbol"
-  daysofmonth = [lpad(i, 2, "0") for i=1:6]
+  basepath = "../fakedata/stocks/minute/$symbol"
+  # daysofmonth = [lpad(i, 2, "0") for i=1:6]
+  daysofmonth = ["06", "07", "08", "09", "10", "13", "14", "15", "16", "17"]
   dayofmonthtopath = (dom -> "$basepath/2015-07-$(dom).csv")
   sources = [dayofmonthtopath(dom) for dom in daysofmonth]
   return InMemoryDataReader(symbol, sources, datetimecol="Datetime")
@@ -135,12 +136,12 @@ function bttest()
   fieldoperations = [
     SMA("SMA30-Close", c, 30),
     SMA("SMA60-Close", c, 60),
-    # ZScore("ZScore-Open", o),
-    # Rank("Rank-Close", c),
-    # Returns("Returns-Close", c),
-    # Returns("Returns-Close-3", c, 3),
-    # LogReturns("LogReturns-Close", c),
-    # LogReturns("LogReturns-Close-3", c, 3),
+    ZScore("ZScore-Open", o),
+    Rank("Rank-Close", c),
+    Returns("Returns-Close", c),
+    Returns("Returns-Close-3", c, 3),
+    LogReturns("LogReturns-Close", c),
+    LogReturns("LogReturns-Close-3", c, 3),
   ]
 
   function ondata(strat::Strategy, event::FieldCompletedProcessingEvent)
@@ -160,8 +161,8 @@ function bttest()
     datareaders=datareaders,
     fieldoperations=fieldoperations,
     numlookbackbars=60,
-    start=Dates.DateTime(2015, 7, 2, 0, 0),
-    endtime=Dates.DateTime(2015, 7, 6, 0, 0),
+    start=Dates.DateTime(2015, 7, 7, 0, 0),
+    endtime=Dates.DateTime(2015, 7, 12, 0, 0),
     tradinginterval=Dates.Minute(1),
     verbosity=NOVERBOSITY,
     datadelay=Dates.Second(5),
