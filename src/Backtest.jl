@@ -34,6 +34,7 @@ module Backtest
 
   module AbstractFields
     using ..Ids: AssetId, FieldId
+    using ..Exceptions: AbstractMethodError
 
     """
       `AbstractFieldOperation` is the mother of all field operations.
@@ -77,7 +78,7 @@ module Backtest
     abstract type AbstractWindowFieldOperation <: AbstractDownstreamFieldOperation end
 
     function dofieldop(windowfieldoperation::AbstractWindowFieldOperation, data::Vector)
-      throw(Exceptions.AbstractMethodError(AbstractWindowFieldOperation, dofieldop))
+      throw(AbstractMethodError(AbstractWindowFieldOperation, dofieldop))
     end
 
     """
@@ -90,7 +91,7 @@ module Backtest
     abstract type AbstractCrossSectionalFieldOperation <: AbstractDownstreamFieldOperation end
 
     function dofieldop(abstractcrosssectionalfieldoperation::AbstractCrossSectionalFieldOperation, data::Dict{AssetId, Any})::Dict{AssetId, Any}
-      throw(AbstractWindowFieldOperation(AbstractCrossSectionalFieldOperation, dofieldop))
+      throw(AbstractMethodError(AbstractCrossSectionalFieldOperation, dofieldop))
     end
 
     export AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
@@ -182,10 +183,8 @@ module Backtest
     function dofieldop(crosssectionalfieldoperation::ZScore, assetdata::NamedArray)::NamedArray
       mu = mean(assetdata)
       sigma = std(assetdata)
-      for i in 1:length(assetdata)
-        assetdata[i] = (assetdata[i]-mu)/sigma
-      end
-      return assetdata
+      zscores = (x->(x-mu)/sigma).(assetdata)
+      return zscores
     end
 
 
@@ -222,11 +221,12 @@ module Backtest
       """Stores all asset data in memory."""
       assetid::AssetId
       data::DataFrame
+      datetimecol::AS where {AS<:AbstractString}
     end
 
     function InMemoryDataReader(assetid::String, sources::Vector{S};
                   datetimecol::String="datetime",
-                  dtfmt::String="yyyy-mm-dd HH:MM:SS",
+                  dtfmt::String="yyyy-mm-ddTHH:MM:SS",
                   delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
       if length(sources) == 0
         throw("`sources` must have at least one element.")
@@ -247,20 +247,20 @@ module Backtest
             A valid type for this column, 'T', would satisfy {T<:Union{AbstractString, Dates.TimeType}}.")
       end
 
-      return InMemoryDataReader(assetid, alldata)
+      return InMemoryDataReader(assetid, alldata, datetimecol)
     end
 
     InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
-        dtfmt::String="yyyy-mm-dd HH:MM:SS", delim::Char=',') =
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS", delim::Char=',') =
       InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
 
-    function fastforward!(datareader::InMemoryDataReader, time::T, datetimecol::ST) where {T<:Dates.TimeType, ST<:AbstractString}
+    function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:Dates.TimeType}
       if nrow(datareader.data) == 0
         throw("`DataReader` has no data.")
-      elseif datareader.data[1, datetimecol] > time
+      elseif datareader.data[1, datareader.datetimecol] > time
         throw(Exceptions.DateTooEarlyError(time, datareader.assetid))
       end
-      while nrow(datareader.data) > 0 && datareader.data[1, datetimecol] < time
+      while nrow(datareader.data) > 0 && datareader.data[1, datareader.datetimecol] < time
         datareader.data = datareader.data[2:nrow(datareader.data), :]
       end
 
@@ -319,7 +319,7 @@ module Backtest
     end
 
     function hitcounter!(counter::Counter, key)
-      # NOTE: Consider placing a lock here to make counter thread-safe
+      # WARNING: If this ends up being parallelized, consider placing a lock here to make Counter thread-safe
       if !haskey(counter.data, key)
         counter.data[key] = 0
       end
@@ -370,7 +370,7 @@ module Backtest
 
     function getnbaragodata(lattice::CalcLattice, ago::Integer)::BarLayer
       if (ago > length(lattice.recentbars)) || (ago < 0) || ((lattice.numbarsstored!=-1) && (ago > lattice.numbarsstored))
-        throw(string("Invalid `ago`: ", ago, " while lattice is only on the ", lattice.curbarindex, " index."))
+        throw("Invalid `ago`: $ago, while lattice is only on the $(lattice.curbarindex), index.")
       end
       mostrecentbarindex = length(lattice.recentbars)
       return lattice.recentbars[mostrecentbarindex-ago]
@@ -381,6 +381,8 @@ module Backtest
     end
 
     function updatebars!(lattice::CalcLattice)
+      """Update the `recentbars` field in preparation for the next bar."""
+      # see documentation for `CalcLattice.numbarsstored`
       if (lattice.numbarsstored!=-1) && (length(lattice.recentbars) >= lattice.numbarsstored)
         deleteat!(lattice.recentbars, 1) # delete least recent bar
       end
@@ -416,20 +418,6 @@ module Backtest
       return windowdata
     end
 
-    function compute!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
-      """Computes a window operation node.
-      """
-      windowfieldoperation = lattice.fieldids_to_ops[fieldid]
-      # Get data for the window operation (time is the free variable)
-      windowdata = getwindowdata(lattice, windowfieldoperation, assetid)
-
-      # Perform the window operation
-      value = dofieldop(windowfieldoperation, windowdata)
-
-      # Set value for this node
-      insertnode!(lattice, assetid, fieldid, value)
-    end
-
     function getcrosssectionaldata(lattice::CalcLattice, crosssectionalfieldoperation::AbstractCrossSectionalFieldOperation)::NamedArray
       upstreamfieldid = crosssectionalfieldoperation.upstreamfieldid
       currentbar = getcurrentbar(lattice)
@@ -457,6 +445,20 @@ module Backtest
       end
     end
 
+    function compute!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
+      """Computes a window operation node.
+      """
+      windowfieldoperation = lattice.fieldids_to_ops[fieldid]
+      # Get data for the window operation (time is the free variable)
+      windowdata = getwindowdata(lattice, windowfieldoperation, assetid)
+
+      # Perform the window operation
+      value = dofieldop(windowfieldoperation, windowdata)
+
+      # Set value for this node
+      insertnode!(lattice, assetid, fieldid, value)
+    end
+
     function propagate!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
       """Given that this node has a value already, propagate forward
       through its dependent nodes.
@@ -481,17 +483,15 @@ module Backtest
           end
         end
       end
-
     end
 
     # Interface functions
-    export newbar!, addfield!
     function newbar!(lattice::CalcLattice, newbardata::Dict{AssetId, Dict{FieldId, T}}) where {T}
 
       lattice.numcompletedassets = Counter{FieldId}()
       lattice.curbarindex += 1
       updatebars!(lattice)
-      for assetid in keys(newbardata)
+      for assetid in lattice.assetids
         for fieldid in lattice.genesisfieldids
           value = newbardata[assetid][fieldid]
           insertnode!(lattice, assetid, fieldid, value)
@@ -536,6 +536,8 @@ module Backtest
         addfield!(lattice, newfieldoperation)
       end
     end
+
+    export newbar!, addfield!, addfields!
   end # module
 
   module Orders
@@ -737,7 +739,7 @@ module Backtest
 
   ### Data Access Functions ###
   function getalldata(strat::Strategy)::Vector{NamedArray}
-    """Returns a vector of (assetid, fieldid)-value pairs. The entries in the vector are in
+    """Returns a vector of (assetid, fieldid)->value pairs. The entries in the vector are in
     chronological order, meaning that the last entry will represent the most recent bar."""
     map((barlayer -> barlayer.bardata), strat.lattice.recentbars)
   end
@@ -802,7 +804,7 @@ module Backtest
     end
 
     for assetid in keys(datareaders)
-      fastforward!(datareaders[assetid], time, datetimecol)
+      fastforward!(datareaders[assetid], time)
     end
   end
 
@@ -981,7 +983,7 @@ module Backtest
     end
   end
 
-  ## Higher level methods used for running a backtest ##
+  ## Highest level non-interface methods ##
   function runnextbar!(strat::Strategy, genesisfielddata::Dict{AssetId, Dict{FieldId, T}}) where {T<:Any}
     # 1. Account for it being a new bar
     # 2. Push a new data event
