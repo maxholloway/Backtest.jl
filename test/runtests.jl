@@ -7,15 +7,17 @@ import Dates: Minute, Day, Date, DateTime
 import CSV
 import Random: MersenneTwister, randperm
 
+# Type definitions (defined here to avoid local-type-definition error)
+struct  UndefWindowFieldOp <: Backtest.AbstractFields.AbstractWindowFieldOperation end
+struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOperation end
+
+
 @testset "Backtest.jl" begin
 
     # Tests the AbstractFields module
     @testset "AbstractFields" begin
         # Test that exceptions are thrown when calling dofieldop on abstract types
-        struct  UndefWindowFieldOp <: Backtest.AbstractFields.AbstractWindowFieldOperation end
         windowfieldop = UndefWindowFieldOp()
-
-        struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOperation end
         crossectionalfieldop = UndefCSFieldOp()
 
         @test_throws Exception Backtest.AbstractFields.dofieldop(windowfieldop, [])
@@ -305,7 +307,6 @@ import Random: MersenneTwister, randperm
 
     # Tests the Backtest.jl API
     @testset "API" begin
-        #
+        # TODO: Write tests for the backtest API
     end
 end
-# Backtest.Test.backtesttest()
