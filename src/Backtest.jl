@@ -6,8 +6,8 @@ module Backtest
   end # module
 
   module Exceptions
-    using Dates
-    using ..Ids: AssetId
+    import Dates: TimeType
+    import ..Ids: AssetId
 
     struct AbstractMethodError <: Exception
       msg::String
@@ -16,24 +16,24 @@ module Backtest
       )
     end
 
-
     struct DateTooEarlyError <: Exception
       msg::String
-      function DateTooEarlyError(requestedtime::T, assetid::AssetId ) where {T<:Dates.TimeType}
+      function DateTooEarlyError(requestedtime::T, assetid::AssetId ) where {T<:TimeType}
         return new( string("The requested time, ", requestedtime, ", is before the first time", " in ", assetid, "."))
       end
     end
 
     struct DateTooFarOutError <: Exception
       msg::String
-      DateTooFarOutError(requestedtime::T, assetid::AssetId) where {T<:Dates.TimeType} = new(
+      DateTooFarOutError(requestedtime::T, assetid::AssetId) where {T<:TimeType} = new(
         string("There is not enough data in ", assetid, " to access ", requestedtime, ".")
       )
     end
   end # module
 
   module AbstractFields
-    using ..Ids: AssetId, FieldId
+    import ..Ids: AssetId, FieldId
+    import ..Exceptions: AbstractMethodError
 
     """
       `AbstractFieldOperation` is the mother of all field operations.
@@ -77,7 +77,7 @@ module Backtest
     abstract type AbstractWindowFieldOperation <: AbstractDownstreamFieldOperation end
 
     function dofieldop(windowfieldoperation::AbstractWindowFieldOperation, data::Vector)
-      throw(Exceptions.AbstractMethodError(AbstractWindowFieldOperation, dofieldop))
+      throw(AbstractMethodError(AbstractWindowFieldOperation, dofieldop))
     end
 
     """
@@ -90,17 +90,17 @@ module Backtest
     abstract type AbstractCrossSectionalFieldOperation <: AbstractDownstreamFieldOperation end
 
     function dofieldop(abstractcrosssectionalfieldoperation::AbstractCrossSectionalFieldOperation, data::Dict{AssetId, Any})::Dict{AssetId, Any}
-      throw(AbstractWindowFieldOperation(AbstractCrossSectionalFieldOperation, dofieldop))
+      throw(AbstractMethodError(AbstractCrossSectionalFieldOperation, dofieldop))
     end
 
     export AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
   end # module
 
   module ConcreteFields
-    using ..Ids: AssetId, FieldId
-    using ..AbstractFields: AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
-    using Statistics
-    using NamedArrays
+    import ..Ids: AssetId, FieldId
+    import ..AbstractFields: AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
+    import Statistics: mean, std
+    import NamedArrays: NamedArray, names
 
 
     ## Common genesis field operations ##
@@ -182,10 +182,9 @@ module Backtest
     function dofieldop(crosssectionalfieldoperation::ZScore, assetdata::NamedArray)::NamedArray
       mu = mean(assetdata)
       sigma = std(assetdata)
-      for i in 1:length(assetdata)
-        assetdata[i] = (assetdata[i]-mu)/sigma
-      end
-      return assetdata
+      zscores = [(x-mu)/sigma for x in assetdata]
+      zscores = NamedArray(zscores, (names(assetdata, 1),))
+      return zscores
     end
 
 
@@ -203,93 +202,11 @@ module Backtest
     end
   end # module
 
-  module DataReaders
-    using Dates
-    using CSV: read
-    using DataFrames: DataFrame, nrow
-    using ..Exceptions
-    using ..Ids: AssetId, FieldId
-
-    abstract type AbstractDataReader end
-    function fastforward!(datareader::AbstractDataReader, time::T) where {T<:Dates.TimeType}
-      """Function that moves datareader forward until the current
-      bar is at or after `time`. This is part of the AbstractDataReader
-      interface."""
-      throw(Exceptions.AbstractMethodError(AbstractDataReader, fastforward!))
-    end
-
-    mutable struct InMemoryDataReader <: AbstractDataReader
-      """Stores all asset data in memory."""
-      assetid::AssetId
-      data::DataFrame
-    end
-
-    function InMemoryDataReader(assetid::String, sources::Vector{S};
-                  datetimecol::String="datetime",
-                  dtfmt::String="yyyy-mm-dd HH:MM:SS",
-                  delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
-      if length(sources) == 0
-        throw("`sources` must have at least one element.")
-      end
-
-      # Read first source, then append all others to the first.
-      alldata = read(sources[1], delim=delim, copycols=true)
-      for i = 2:length(sources)
-        append!(alldata, DataFrame(read(sources[i], delim=delim), copycols=true))
-      end
-
-      if size(alldata)[1] == 0
-        throw("No data was parsed!")
-      elseif isa(alldata[1, datetimecol], AbstractString)
-        alldata[!, datetimecol] = Dates.DateTime.(alldata[:, datetimecol], Dates.DateFormat(dtfmt))
-      elseif !isa(alldata[1, datetimecol], Dates.TimeType)
-        throw("The given datetime column, $datetimecol, has values with invalid type '$(typeof(alldata[1, datetimecol]))'.
-            A valid type for this column, 'T', would satisfy {T<:Union{AbstractString, Dates.TimeType}}.")
-      end
-
-      return InMemoryDataReader(assetid, alldata)
-    end
-
-    InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
-        dtfmt::String="yyyy-mm-dd HH:MM:SS", delim::Char=',') =
-      InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
-
-    function fastforward!(datareader::InMemoryDataReader, time::T, datetimecol::ST) where {T<:Dates.TimeType, ST<:AbstractString}
-      if nrow(datareader.data) == 0
-        throw("`DataReader` has no data.")
-      elseif datareader.data[1, datetimecol] > time
-        throw(Exceptions.DateTooEarlyError(time, datareader.assetid))
-      end
-      while nrow(datareader.data) > 0 && datareader.data[1, datetimecol] < time
-        datareader.data = datareader.data[2:nrow(datareader.data), :]
-      end
-
-      if nrow(datareader.data) == 0
-        throw(Exceptions.DateTooFarOutError(time, datareader.assetid))
-      end
-    end
-
-    function peek(datareader::InMemoryDataReader)::Dict{FieldId, Any}
-      toprow::NamedTuple = copy(datareader.data[1, :])
-      fieldtovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
-      for kvpair in zip(fieldnames(typeof(toprow)), toprow)
-        fieldtovalues[string(kvpair[1])] = kvpair[2]
-      end
-      return fieldtovalues
-    end
-
-    function popfirst!(datareader::InMemoryDataReader)::Dict{FieldId, Any}
-      fieldtovalues = peek(datareader)
-      delete!(datareader.data, 1)
-      return fieldtovalues
-    end
-  end # module
-
   module Engine
-    using NamedArrays: NamedArray
-    using ..Ids: AssetId, FieldId
-    using ..AbstractFields: AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
-    using ..ConcreteFields: dofieldop
+    import NamedArrays: NamedArray
+    import ..Ids: AssetId, FieldId
+    import ..AbstractFields: AbstractFieldOperation, AbstractGenesisFieldOperation, AbstractWindowFieldOperation, AbstractCrossSectionalFieldOperation
+    import ..ConcreteFields: dofieldop
     ## BarLayer definition and related functions ##
     struct BarLayer
       bardata::NamedArray{T, 2} where {T<:Any}
@@ -319,7 +236,7 @@ module Backtest
     end
 
     function hitcounter!(counter::Counter, key)
-      # NOTE: Consider placing a lock here to make counter thread-safe
+      # WARNING: If this ends up being parallelized, consider placing a lock here to make Counter thread-safe
       if !haskey(counter.data, key)
         counter.data[key] = 0
       end
@@ -368,10 +285,14 @@ module Backtest
       )
     end
 
-    function getnbaragodata(lattice::CalcLattice, ago::Integer)::BarLayer
-      if (ago > length(lattice.recentbars)) || (ago < 0) || ((lattice.numbarsstored!=-1) && (ago > lattice.numbarsstored))
-        throw(string("Invalid `ago`: ", ago, " while lattice is only on the ", lattice.curbarindex, " index."))
+    function tryaccessago(lattice::CalcLattice, ago::Integer)
+      if (ago > numbarsavailable(lattice)) || (ago < 0) || ((lattice.numbarsstored!=-1) && (ago > lattice.numbarsstored))
+        throw("Invalid `ago`: $ago, while lattice is only on the $(lattice.curbarindex), index.")
       end
+    end
+
+    function getnbaragodata(lattice::CalcLattice, ago::Integer)::BarLayer
+      tryaccessago(lattice, ago)
       mostrecentbarindex = length(lattice.recentbars)
       return lattice.recentbars[mostrecentbarindex-ago]
     end
@@ -381,6 +302,8 @@ module Backtest
     end
 
     function updatebars!(lattice::CalcLattice)
+      """Update the `recentbars` field in preparation for the next bar."""
+      # see documentation for `CalcLattice.numbarsstored`
       if (lattice.numbarsstored!=-1) && (length(lattice.recentbars) >= lattice.numbarsstored)
         deleteat!(lattice.recentbars, 1) # delete least recent bar
       end
@@ -416,20 +339,6 @@ module Backtest
       return windowdata
     end
 
-    function compute!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
-      """Computes a window operation node.
-      """
-      windowfieldoperation = lattice.fieldids_to_ops[fieldid]
-      # Get data for the window operation (time is the free variable)
-      windowdata = getwindowdata(lattice, windowfieldoperation, assetid)
-
-      # Perform the window operation
-      value = dofieldop(windowfieldoperation, windowdata)
-
-      # Set value for this node
-      insertnode!(lattice, assetid, fieldid, value)
-    end
-
     function getcrosssectionaldata(lattice::CalcLattice, crosssectionalfieldoperation::AbstractCrossSectionalFieldOperation)::NamedArray
       upstreamfieldid = crosssectionalfieldoperation.upstreamfieldid
       currentbar = getcurrentbar(lattice)
@@ -457,6 +366,20 @@ module Backtest
       end
     end
 
+    function compute!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
+      """Computes a window operation node.
+      """
+      windowfieldoperation = lattice.fieldids_to_ops[fieldid]
+      # Get data for the window operation (time is the free variable)
+      windowdata = getwindowdata(lattice, windowfieldoperation, assetid)
+
+      # Perform the window operation
+      value = dofieldop(windowfieldoperation, windowdata)
+
+      # Set value for this node
+      insertnode!(lattice, assetid, fieldid, value)
+    end
+
     function propagate!(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
       """Given that this node has a value already, propagate forward
       through its dependent nodes.
@@ -481,18 +404,23 @@ module Backtest
           end
         end
       end
-
     end
 
     # Interface functions
-    export newbar!, addfield!
     function newbar!(lattice::CalcLattice, newbardata::Dict{AssetId, Dict{FieldId, T}}) where {T}
 
       lattice.numcompletedassets = Counter{FieldId}()
       lattice.curbarindex += 1
       updatebars!(lattice)
-      for assetid in keys(newbardata)
+      for assetid in lattice.assetids
+        if !(assetid in keys(newbardata))
+          throw("Asset id ``$assetid` was expected, but is not among the asset ids in the new bar data.")
+        end
         for fieldid in lattice.genesisfieldids
+          if !(fieldid in keys(newbardata[assetid]))
+            throw("Field id ``$fieldid` was expected, but is not among the field ids in the new bar data.")
+          end
+
           value = newbardata[assetid][fieldid]
           insertnode!(lattice, assetid, fieldid, value)
           propagate!(lattice, assetid, fieldid)
@@ -536,10 +464,147 @@ module Backtest
         addfield!(lattice, newfieldoperation)
       end
     end
+
+    function numbarsavailable(lattice::CalcLattice)
+      return lattice.recentbars |> length
+    end
+
+    function getalldata(lattice::CalcLattice)::Vector{NamedArray}
+      """Returns a vector of (assetid, fieldid)->value pairs. The entries in the vector are in
+      chronological order, meaning that the last entry will represent the most recent bar."""
+      return map((barlayer -> barlayer.bardata), lattice.recentbars)
+    end
+
+    function data(lattice::CalcLattice, ago::Integer)::NamedArray
+      """Gets (assetid, fieldid)->value pairs for `ago` bars ago; if `ago=0`,
+      this gets the previous bar's data."""
+      tryaccessago(lattice, ago)
+      return lattice.recentbars[numbarsavailable(lattice) - ago].bardata
+    end
+
+    function data(lattice::CalcLattice, ago::Integer, fieldid::FieldId)::NamedArray
+      """Gets (assetid)->value pairs for `ago` bars ago for a particular field;
+      if ago=0, then this is equivalent to data(strat, fieldid)."""
+      tryaccessago(lattice, ago)
+      return data(lattice, ago)[:, fieldid]
+    end
+
+    function data(lattice::CalcLattice, ago::Integer, assetid::AssetId, fieldid::FieldId)
+      """Gets the value for a particular field for a particular asset on a particular bar; if
+      ago=0, then this is equivalent to data(strat, assetid, fieldid)."""
+      tryaccessago(lattice, ago)
+      return data(lattice, ago)[assetid, fieldid]
+    end
+
+    function data(lattice::CalcLattice)::NamedArray
+      """Gets (assetid, fieldid)->value pairs for the previous bar.
+      For example, if the time between bars is 1 minute, and the current time
+      is 11:33:25 (HH:MM:SS), then this would give OHLCV data from
+      11:32:00-11:32:59.999... . WE CANNOT ACCESS DATA FOR THE CURRENT BAR,
+      SINCE IT IS NOT COMPLETED YET (e.g. cannot access this bar's open price)."""
+      return data(lattice, 0)
+    end
+
+    function data(lattice::CalcLattice, fieldid::FieldId)::NamedArray
+      """Gets assetid->value pairs for the previous bar."""
+      return data(lattice, 0, fieldid)
+    end
+
+    function data(lattice::CalcLattice, assetid::AssetId, fieldid::FieldId)
+      """Gets value for a particular field for a particular asset on the previous bar."""
+      return data(lattice, 0, assetid, fieldid)
+    end
+
+    export newbar!, addfields!, getalldata, data, numbarsavailable
+  end # module
+
+  module DataReaders
+    import Dates: TimeType, DateTime, DateFormat
+    import CSV: File
+    import DataFrames: DataFrame, nrow, DataFrame!
+    import ..Exceptions: AbstractMethodError, DateTooEarlyError, DateTooFarOutError
+    import ..Ids: AssetId, FieldId
+
+    abstract type AbstractDataReader end
+    function fastforward!(datareader::AbstractDataReader, time::T) where {T<:TimeType}
+      """Function that moves datareader forward until the current
+      bar is at or after `time`. This is part of the AbstractDataReader
+      interface."""
+      throw(AbstractMethodError(AbstractDataReader, fastforward!))
+    end
+
+    mutable struct InMemoryDataReader <: AbstractDataReader
+      """Stores all asset data in memory."""
+      assetid::AssetId
+      data::DataFrame
+      datetimecol::AS where {AS<:AbstractString}
+    end
+
+    function InMemoryDataReader(assetid::String, sources::Vector{S};
+                  datetimecol::String="datetime",
+                  dtfmt::String="yyyy-mm-ddTHH:MM:SS",
+                  delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
+      if length(sources) == 0
+        throw("`sources` must have at least one element.")
+      end
+
+      # Read first source, then append all others to the first.
+      # alldata = read(sources[1], delim=delim, copycols=true)
+      alldata = File(sources[1], delim=delim) |> DataFrame!
+      for i = 2:length(sources)
+        # append!(alldata, read(sources[i], delim=delim), copycols=true)
+        append!(alldata, File(sources[i], delim=delim) |> DataFrame!)
+      end
+
+      if size(alldata)[1] == 0
+        throw("No data was parsed!")
+      elseif isa(alldata[1, datetimecol], AbstractString)
+        alldata[!, datetimecol] = DateTime.(alldata[:, datetimecol], DateFormat(dtfmt))
+      elseif !isa(alldata[1, datetimecol], TimeType)
+        throw("The given datetime column, $datetimecol, has values with invalid type '$(typeof(alldata[1, datetimecol]))'.
+            A valid type for this column, 'T', would satisfy {T<:Union{AbstractString, Dates.TimeType}}.")
+      end
+
+      return InMemoryDataReader(assetid, alldata, datetimecol)
+    end
+
+    InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS", delim::Char=',') =
+      InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
+
+    function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:TimeType}
+      if nrow(datareader.data) == 0
+        throw("`DataReader` has no data.")
+      elseif datareader.data[1, datareader.datetimecol] > time
+        throw(DateTooEarlyError(time, datareader.assetid))
+      end
+      while nrow(datareader.data) > 0 && datareader.data[1, datareader.datetimecol] < time
+        datareader.data = datareader.data[2:nrow(datareader.data), :]
+      end
+
+      if nrow(datareader.data) == 0
+        throw(DateTooFarOutError(time, datareader.assetid))
+      end
+    end
+
+    function peek(datareader::InMemoryDataReader)::Dict{FieldId, Any}
+      toprow::NamedTuple = copy(datareader.data[1, :])
+      fieldtovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
+      for kvpair in zip(fieldnames(typeof(toprow)), toprow)
+        fieldtovalues[string(kvpair[1])] = kvpair[2]
+      end
+      return fieldtovalues
+    end
+
+    function popfirst!(datareader::InMemoryDataReader)::Dict{FieldId, Any}
+      fieldtovalues = peek(datareader)
+      delete!(datareader.data, 1)
+      return fieldtovalues
+    end
   end # module
 
   module Orders
-    using ..Ids: AssetId
+    import ..Ids: AssetId
 
     abstract type AbstractOrder end
 
@@ -556,9 +621,9 @@ module Backtest
   end # module
 
   module Events
-    using Dates: TimeType
-    using ..Ids: AssetId, FieldId, OrderId
-    using ..Orders: AbstractOrder
+    import Dates: TimeType
+    import ..Ids: AssetId, FieldId, OrderId
+    import ..Orders: AbstractOrder
 
     # Event definitions #
     """ `AbstractEvent` is the ancestor to all concrete events.
@@ -615,18 +680,20 @@ module Backtest
   end # module
 
   ## Imports
-  using Dates: DateTime, TimeType, Minute, Millisecond
-  using Dates
-  using UUIDs: uuid4
-  using NamedArrays: NamedArray
-  using .Ids: AssetId, FieldId, OrderId
-  using .AbstractFields: AbstractFieldOperation
-  using .ConcreteFields: Open, High, Low, Close, Volume
-  using .Events: EventQueue, AbstractEvent, NewBarEvent, FieldCompletedProcessingEvent, OrderFillEvent, AbstractOrderEvent, OrderAckEvent
-  using .Events
+  import Dates: DateTime, TimeType, Minute, Millisecond, Period,
+                TimePeriod, format, epochms2datetime, datetime2epochms, now
+  import UUIDs: uuid4
+  import NamedArrays: NamedArray
+  import .Ids: AssetId, FieldId, OrderId
+  import .AbstractFields: AbstractFieldOperation
+  import .ConcreteFields: Open, High, Low, Close, Volume
+  import .Events: EventQueue, AbstractEvent, NewBarEvent, FieldCompletedProcessingEvent,
+        OrderFillEvent, AbstractOrderEvent, OrderAckEvent, push!, empty, peek, pop!
+
   using .Orders
-  using .Engine: CalcLattice, addfields!, newbar!
-  using .DataReaders: AbstractDataReader, fastforward!, popfirst!, peek
+  import .Engine: CalcLattice, addfields!, newbar!, getalldata, data, numbarsavailable
+  import .DataReaders: AbstractDataReader, fastforward!, popfirst!
+  import .DataReaders # required in order to resolve `peek` collision
 
   ## Verbosity Levels ##
   abstract type AbstractVerbosity end
@@ -641,12 +708,12 @@ module Backtest
     datareaders::Dict{AssetId, DR} where {DR<:AbstractDataReader}
     fieldoperations::Vector{FO} where {FO<:AbstractFieldOperation}
     numlookbackbars::Integer
-    start::ST where {ST<:Dates.TimeType}
-    endtime::ET where {ET<:Dates.TimeType}
-    tradinginterval::TTI where {TTI<:Dates.Period}
+    start::ST where {ST<:TimeType}
+    endtime::ET where {ET<:TimeType}
+    tradinginterval::TTI where {TTI<:Period}
     verbosity::DataType
-    datadelay::DDT where {DDT<:Dates.Period}
-    messagelatency::ODT where {ODT<:Dates.Period}
+    datadelay::DDT where {DDT<:Period}
+    messagelatency::ODT where {ODT<:Period}
     datetimecol::String
     opencol::String
     highcol::String
@@ -677,8 +744,8 @@ module Backtest
                           onorderevent::Function=(orderevent->nothing), # user-defined function that performs logic when an order event is received
                           principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
                           ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
-                          ST<:Dates.TimeType, ET<:Dates.TimeType, TTI<:Dates.TimePeriod,
-                          DDT<:Dates.Period, ODT<:Dates.Period, PT<:Number }
+                          ST<:TimeType, ET<:TimeType, TTI<:TimePeriod,
+                          DDT<:Period, ODT<:Period, PT<:Number }
     return StrategyOptions(datareaders, fieldoperations, numlookbackbars,
       start, endtime, tradinginterval, verbosity, datadelay, messagelatency, datetimecol,
       opencol, highcol, lowcol, closecol, volumecol,  ondataevent, onorderevent,
@@ -735,30 +802,27 @@ module Backtest
     )
   end
 
-  ### Data Access Functions ###
+  ### Data Access Functions (getters for `Engine.recentbars`) ###
   function getalldata(strat::Strategy)::Vector{NamedArray}
-    """Returns a vector of (assetid, fieldid)-value pairs. The entries in the vector are in
-    chronological order, meaning that the last entry will represent the most recent bar."""
-    map((barlayer -> barlayer.bardata), strat.lattice.recentbars)
+    Engine.getalldata(strat.lattice)
   end
 
   function data(strat::Strategy, ago::Integer)::NamedArray
     """Gets (assetid, fieldid)->value pairs for `ago` bars ago; if `ago=0`,
     this gets the previous bar's data."""
-    alldata = getalldata(strat)
-    return alldata[length(alldata)-ago]
+    return data(strat.lattice, ago)
   end
 
   function data(strat::Strategy, ago::Integer, fieldid::FieldId)::NamedArray
     """Gets (assetid)->value pairs for `ago` bars ago for a particular field;
     if ago=0, then this is equivalent to data(strat, fieldid)."""
-    return data(strat, ago)[:, fieldid]
+    return data(strat.lattice, ago, fieldid)
   end
 
   function data(strat::Strategy, ago::Integer, assetid::AssetId, fieldid::FieldId)
     """Gets the value for a particular field for a particular asset on a particular bar; if
     ago=0, then this is equivalent to data(strat, assetid, fieldid)."""
-    return data(strat, ago)[assetid, fieldid]
+    return data(strat.lattice, ago, assetid, fieldid)
   end
 
   function data(strat::Strategy)::NamedArray
@@ -767,28 +831,28 @@ module Backtest
     is 11:33:25 (HH:MM:SS), then this would give OHLCV data from
     11:32:00-11:32:59.999... . WE CANNOT ACCESS DATA FOR THE CURRENT BAR,
     SINCE IT IS NOT COMPLETED YET (e.g. cannot access this bar's open price)."""
-    return data(strat, 0)
+    return data(strat.lattice)
   end
 
   function data(strat::Strategy, fieldid::FieldId)::NamedArray
     """Gets assetid->value pairs for the previous bar."""
-    return data(strat, 0, fieldid)
+    return data(strat.lattice, fieldid)
   end
 
   function data(strat::Strategy, assetid::AssetId, fieldid::FieldId)
     """Gets value for a particular field for a particular asset on the previous bar."""
-    return data(strat, 0, assetid, fieldid)
+    return data(strat.lattice, assetid, fieldid)
   end
 
   function numbarsavailable(strat::Strategy)
-    return strat.lattice.recentbars |> length
+    return numbarsavailable(strat.lattice)
   end
 
 
   ## Utility functions ##
   function log(strat::Strategy, message::String, verbosity::Type)
     if verbosity <: strat.options.verbosity
-      time = Dates.format(strat.curtime, "yyyy-mm-dd HH:MM:SS.sss")
+      time = format(strat.curtime, "yyyy-mm-dd HH:MM:SS.sss")
       println(string(time, " ~~~~ ", message))
     end
   end
@@ -802,17 +866,17 @@ module Backtest
     end
 
     for assetid in keys(datareaders)
-      fastforward!(datareaders[assetid], time, datetimecol)
+      fastforward!(datareaders[assetid], time)
     end
   end
 
   curbarendtime(strat::Strategy) = strat.curbarstarttime + strat.options.tradinginterval
 
-  function randomtimeininterval(left::LT, right::RT) where {LT<:Dates.TimeType, RT<:Dates.TimeType}
-    leftms = Dates.datetime2epochms(left)
-    rightms = Dates.datetime2epochms(right)
+  function randomtimeininterval(left::LT, right::RT) where {LT<:TimeType, RT<:TimeType}
+    leftms = datetime2epochms(left)
+    rightms = datetime2epochms(right)
     randms = rand(leftms:rightms)
-    return Dates.epochms2datetime(randms)
+    return epochms2datetime(randms)
   end
 
   ## Methods related to orders ##
@@ -833,7 +897,7 @@ module Backtest
     strat.orders[orderid] = order
 
     # Push event corresponding to an order ack we would receive from our brokerage/exchange
-    Events.push!(
+    push!(
       strat.events,
       OrderAckEvent(
         strat.curtime + 2*strat.options.messagelatency,
@@ -857,7 +921,7 @@ module Backtest
       throw("Cannot process an order with `size`=0.")
     end
 
-    genesisdata = peek(strat.options.datareaders[order.assetid])
+    genesisdata = DataReaders.peek(strat.options.datareaders[order.assetid])
     open = genesisdata[strat.options.opencol]
     low = genesisdata[strat.options.lowcol]
     high = genesisdata[strat.options.highcol]
@@ -867,7 +931,7 @@ module Backtest
       if strat.portfolio.buyingpower + deltacash < 0
         throw(string("Tried to place order ", order, " at price ", mid, " but there is only ", strat.portfolio.buyingpower, " of cash."))
       end
-      Events.push!(strat.events, OrderFillEvent(
+      push!(strat.events, OrderFillEvent(
         strat.curtime + strat.options.messagelatency, # fills as soon as it gets to the exchange
         order,
         deltacash,
@@ -891,7 +955,7 @@ module Backtest
         end
         # say it executes at a random time within the bar
         executiontime = randomtimeininterval(strat.curtime+strat.options.messagelatency, curbarendtime(strat)+strat.options.messagelatency) #
-        Events.push!(strat.events, OrderFillEvent(
+        push!(strat.events, OrderFillEvent(
           executiontime,
           order,
           deltacash,
@@ -962,7 +1026,7 @@ module Backtest
       " fields) took more than the available time in the bar to compute fields."))
     end
 
-    Events.push!(strat.events, FieldCompletedProcessingEvent(timeaftercomputation))
+    push!(strat.events, FieldCompletedProcessingEvent(timeaftercomputation))
   end
 
   function processevent!(strat::Strategy, event::T) where {T<:AbstractEvent}
@@ -981,7 +1045,7 @@ module Backtest
     end
   end
 
-  ## Higher level methods used for running a backtest ##
+  ## Highest level non-interface methods ##
   function runnextbar!(strat::Strategy, genesisfielddata::Dict{AssetId, Dict{FieldId, T}}) where {T<:Any}
     # 1. Account for it being a new bar
     # 2. Push a new data event
@@ -990,7 +1054,7 @@ module Backtest
 
     # Account for new bar
     strat.curbarindex += 1
-    strat.curbarstarttime = genesisfielddata[strat.assetids[1]][strat.options.datetimecol]
+    strat.curbarstarttime = DateTime(genesisfielddata[strat.assetids[1]][strat.options.datetimecol])
     strat.curtime = strat.curbarstarttime
 
     # Fill all of the orders for the last bar; NOTE: this works due to a weird
@@ -1003,13 +1067,13 @@ module Backtest
     tryfillorders!(strat)
 
     # Push the data to the queue
-    Events.push!(strat.events, NewBarEvent(
+    push!(strat.events, NewBarEvent(
       strat.curtime + strat.options.datadelay,
       genesisfielddata
     ))
 
-    while !Events.empty(strat.events) && Events.peek(strat.events).time < curbarendtime(strat)
-      event = Events.pop!(strat.events)
+    while !empty(strat.events) && peek(strat.events).time < curbarendtime(strat)
+      event = pop!(strat.events)
       processevent!(strat, event)
     end
     log(strat, string("Finished running bar #", strat.curbarindex, "."), INFO)
@@ -1018,7 +1082,7 @@ module Backtest
   function peekgenesisdata(strat::Strategy)
     genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
     for assetid in assetids
-      genesisfielddata[assetid] = peek(strat.options.datareaders[assetid])
+      genesisfielddata[assetid] = DataReaders.peek(strat.options.datareaders[assetid])
     end
     return genesisfielddata
   end
@@ -1028,7 +1092,6 @@ module Backtest
     uniquedatetimes = Set([])
     genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
     for assetid in strat.assetids
-      # println(strat.options.datareaders[assetid])
       genesisassetfielddata = popfirst!(strat.options.datareaders[assetid])
       datetime = genesisassetfielddata[strat.options.datetimecol]
       union!(uniquedatetimes, [datetime])
