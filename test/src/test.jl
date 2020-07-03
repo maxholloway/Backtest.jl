@@ -1,38 +1,5 @@
 module test
 
-module Utils
-  using Backtest.Ids: AssetId, FieldId
-  using Backtest: Strategy, numbarsavailable, data, log, NOVERBOSITY
-
-
-  # Logic for crossover events #
-  function _cross(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId, over::Bool)::Bool
-    """Determines if field `fielda` has "crossed over" field `fieldb` in the most recent
-    bar. If `over`, then this will return true if fields `a` and `b` are equal, and then `a`
-    moves higher than `b`. If not `over`, this will return true if fields `a`
-    and `b` are equal, and then `a` moves lower than `b`. This ensures that any
-    cross over or cross under will be discovered if this function is run on each
-    bar."""
-    if numbarsavailable(strat) >= 2
-      (prepreva, preprevb) = data(strat, 1, assetid, fielda), data(strat, 1, assetid, fieldb)
-      (preva, prevb) = data(strat, 0, assetid, fielda), data(strat, 0, assetid, fieldb)
-      if over
-        return (prepreva <= preprevb) && (preva > prevb)
-      else
-        return (prepreva >= preprevb) && (preva < prevb)
-      end
-    else
-      return false
-    end
-  end
-
-  crossover(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId) =
-    _cross(strat, assetid, fielda, fieldb, true)
-
-  crossunder(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId) =
-    _cross(strat, assetid, fielda, fieldb, false)
-end # module
-
 using Random
 using Dates
 
@@ -44,7 +11,7 @@ using Backtest.Events: FieldCompletedProcessingEvent, AbstractOrderEvent
 using Backtest.DataReaders: InMemoryDataReader
 using Backtest.Orders: MarketOrder, LimitOrder
 using Backtest: Strategy, StrategyOptions, run, order!, log, INFO, TRANSACTIONS, NOVERBOSITY
-using .Utils: crossover, crossunder
+using Backtest.Utils: crossover, crossunder
 
 #
 # function enginetest()
