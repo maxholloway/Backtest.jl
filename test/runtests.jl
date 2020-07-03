@@ -308,4 +308,8 @@ struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOper
     @testset "API" begin
         # TODO: Write tests for the backtest API
     end
+
+    @testset "Utils" begin
+
+    end
 end
