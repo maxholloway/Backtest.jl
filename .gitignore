@@ -1,6 +1,7 @@
 # Files modified in small tests
 data
 fakedata
+stash
 Untitled*.ipynb
 
 # Inner git repos used for dev
