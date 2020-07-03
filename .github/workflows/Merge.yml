@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v1.0.0
       - name: Set up Julia environment
-      - uses: julia-actions/setup-julia@v1.1.8
+        uses: julia-actions/setup-julia@v1.1.8
 
     
   
