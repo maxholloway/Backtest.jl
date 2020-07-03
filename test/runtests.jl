@@ -1,10 +1,11 @@
-using Backtest
-using Test
-using NamedArrays
-using Statistics
-using DataFrames
-using Dates
-using CSV
+import Backtest
+import Test: @test, @testset, @test_throws
+import NamedArrays: NamedArray
+import Statistics: mean, std
+import DataFrames: DataFrame
+import Dates: Minute, Day, Date, DateTime
+import CSV
+import Random: MersenneTwister, randperm
 
 @testset "Backtest.jl" begin
 
@@ -78,8 +79,9 @@ using CSV
         ]
 
         # Test Z-Score
+        means = mean(csdata)
         means = (x -> sum(x)/length(x)).(csdata)
-        stddevs = Statistics.std.(csdata)
+        stddevs = std.(csdata)
         function makezscorefn(mu, sigma)
             function zscorefn(x)
                 return (x-mu)/sigma
@@ -105,20 +107,89 @@ using CSV
         @test expectedranks == actualranks
     end
 
+    # Tests the Engine module
+    @testset "Engine" begin
+        nbarsstoredoptions =
+        assetids = ["A", "B", "C"]
+        (O, H, L, C, V) = ("Open", "High", "Low", "Close", "Volume")
+        function testengine(nbarstostore)
+            lattice = Backtest.Engine.CalcLattice(nbarstostore, assetids)
+            @test Backtest.Engine.numbarsavailable(lattice) == 0
+            @test_throws Exception Backtest.Engine.data(lattice)
+
+            # Make field operations and add them to the backtest
+            fieldoperations = [
+                Backtest.ConcreteFields.Open(O),
+                Backtest.ConcreteFields.High(H),
+                Backtest.ConcreteFields.Low(L),
+                Backtest.ConcreteFields.Close(C),
+                Backtest.ConcreteFields.Volume(V),
+                Backtest.ConcreteFields.SMA("SMA1High", H, 1),
+                Backtest.ConcreteFields.SMA("SMA2Open", O, 2),
+                Backtest.ConcreteFields.Rank("RankLow", L),
+                Backtest.ConcreteFields.Rank("RankSMA1High", "SMA1High")
+            ]
+            Backtest.Engine.addfields!(lattice, fieldoperations)
+
+            # Make bars of data and run them
+            allbars = [
+                Dict(
+                    "A" => Dict(O=>10, H=>15, L=>8, C=>11, V=>10000),
+                    "B" => Dict(O=>100, H=>101, L=>90, C=>93, V=>101),
+                    "C" => Dict(O=>60, H=>80, L=>60, C=>80, V=>10000),
+                ),
+                Dict(
+                    "A" => Dict(O=>11, H=>11, L=>3, C=>6, V=>8000),
+                    "B" => Dict(O=>93, H=>100, L=>90, C=>99, V=>101),
+                    "C" => Dict(O=>80, H=>80, L=>60, C=>80, V=>10000),
+                )
+            ]
+
+            # Test that the first bar of data gets loaded properly and
+            # computes dependent fields
+            Backtest.Engine.newbar!(lattice, allbars[1])
+            @test Backtest.Engine.data(lattice, "A", O) == 10
+            @test Backtest.Engine.data(lattice, "B", "SMA1High") == 101
+            @test Backtest.Engine.data(lattice, "B", "RankLow") == 1
+            @test Backtest.Engine.data(lattice, "C", "RankLow") == 2
+            @test Backtest.Engine.data(lattice, "B", "RankSMA1High") == 1
+
+            @test Backtest.Engine.numbarsavailable(lattice) == 1
+
+            # Test that the second bar of data gets load
+            Backtest.Engine.newbar!(lattice, allbars[2])
+            Backtest.Engine.data(lattice, "A", O)
+            @test Backtest.Engine.data(lattice, "A", O) == 11
+            @test Backtest.Engine.data(lattice, "B", "SMA1High") == 100
+            @test Backtest.Engine.data(lattice, "B", "RankLow") == 1
+            @test Backtest.Engine.data(lattice, "C", "RankLow") == 2
+            @test Backtest.Engine.data(lattice, "B", "RankSMA1High") == 1
+            @test Backtest.Engine.data(lattice, "A", "SMA2Open") == (10+11)/2
+            @test Backtest.Engine.data(lattice, "B", "SMA2Open") == (93+100)/2
+            @test Backtest.Engine.data(lattice, "C", "SMA2Open") == (60+80)/2
+
+
+            @test Backtest.Engine.numbarsavailable(lattice) == 2
+        end
+
+        testengine(-1)
+        testengine(5)
+        testengine(1_000_000_000)
+    end
+
     # Tests the DataReaders module
     @testset "DataReaders" begin
-
         # Generate some data that spans 10 files with 1000 entries each
         nfiles = 10
         barsperfile = 1440
         drift = 1.001
 
-        basedate = Dates.DateTime(1)
-        dates = [basedate + Dates.Day(i) for i = 1:nfiles]
+        basedate = DateTime(1)
+        dates = [basedate + Day(i) for i = 1:nfiles]
         datadir = "____tempdata___"
         mkdir(datadir)
         try
-            filenames = ["$datadir/$(Dates.Date(date)).csv" for date in dates]
+            filenames = ["$datadir/$(Date(date)).csv" for date in dates]
 
             (openbase, highbase, lowbase, closebase, volumebase) = (100, 120, 79.3, 98.1, 10000)
             oval = ((i, j) -> i+j)
@@ -128,7 +199,7 @@ using CSV
             vval = ((i, j) -> 100)
             for (i, filename) in enumerate(filenames)
                 df = DataFrame(
-                        DateTime = [dates[i] + Dates.Minute(j-1) for j in 1:barsperfile],
+                        DateTime = [dates[i] + Minute(j-1) for j in 1:barsperfile],
                         Open = [oval(i, j) for j in 1:barsperfile],
                         High = [hval(i, j) for j in 1:barsperfile],
                         Low = [lval(i, j) for j in 1:barsperfile],
@@ -169,8 +240,8 @@ using CSV
 
             for datareader in makedatareaders()
                 # Test that that fastforward throws an exception when the given date is too early
-                @test_throws Backtest.Exceptions.DateTooEarlyError Backtest.DataReaders.fastforward!(datareader, Dates.DateTime(0))
-                @test_throws Backtest.Exceptions.DateTooEarlyError Backtest.DataReaders.fastforward!(datareader, Dates.Date(0, 1, 1))
+                @test_throws Backtest.Exceptions.DateTooEarlyError Backtest.DataReaders.fastforward!(datareader, DateTime(0))
+                @test_throws Backtest.Exceptions.DateTooEarlyError Backtest.DataReaders.fastforward!(datareader, Date(0, 1, 1))
 
                 # Test that fastforward makes the underlying DataReader's current time
                 # be greater than the input time.
@@ -183,7 +254,7 @@ using CSV
 
             for datareader in makedatareaders()
                 # Test that that fastforward throws an exception when the given date is too late
-                @test_throws Backtest.Exceptions.DateTooFarOutError Backtest.DataReaders.fastforward!(datareader, Dates.DateTime(2030))
+                @test_throws Backtest.Exceptions.DateTooFarOutError Backtest.DataReaders.fastforward!(datareader, DateTime(2030))
 
             end
 
@@ -193,35 +264,48 @@ using CSV
         end
     end
 
-    # Tests the Engine module
-    @testset "Engine" begin
-        # 1. Make a bunch of data
-        # 2. Create a CalcLattice, and
-        # 3. For each bar of the data
-        #     4. Calculate the actual field operation values
-        #     5. Run the bar through CalcLattice, and get the result
-        #     6. Test that expected result = received result
-        #    end
-    end
-
     # Tests the Events module
     @testset "Events" begin
-        # Test the event queue:
-        # 1. Make a sequenced list of DateTime, `sorted`
-        # 2. Copy and scramble `sorted` to get a new list, `unsorted`
-        # 3. Make a new event queue, and assert that it is empty
-        # 4. One-by-one, push! the elements of `unsorted` into the event queue, and test that empty() is not true
-        # 5. One-by-one, remove elements from the event queue (checking that peek == pop), and assert that they are in the right order (using `sorted` to check)
-        # 6. Assert that the event queue is empty
-        # 7. Do 1-6 again for Dates (instead of DateTime)
+        exampleorder = Backtest.Orders.MarketOrder("A", 10)
+        sortedevents = [
+            Backtest.Events.NewBarEvent(DateTime(0), Dict(""=>Dict(""=>nothing))),
+            Backtest.Events.FieldCompletedProcessingEvent(DateTime(1)),
+            Backtest.Events.OrderAckEvent(DateTime(1, 2), "__an_order_id"),
+            Backtest.Events.OrderFillEvent(DateTime(1, 3), exampleorder, 100, -1),
+
+            Backtest.Events.NewBarEvent(DateTime(2), Dict(""=>Dict(""=>nothing))),
+            Backtest.Events.FieldCompletedProcessingEvent(DateTime(3)),
+            Backtest.Events.OrderAckEvent(DateTime(3, 2), "__an_order_id"),
+            Backtest.Events.OrderFillEvent(DateTime(3, 3), exampleorder, 100, -1),
+
+            Backtest.Events.NewBarEvent(DateTime(4), Dict(""=>Dict(""=>nothing))),
+            Backtest.Events.FieldCompletedProcessingEvent(DateTime(5)),
+            Backtest.Events.OrderAckEvent(DateTime(5, 2), "__an_order_id"),
+            Backtest.Events.OrderFillEvent(DateTime(5, 3), exampleorder, 100, -1)
+        ]
+
+        seed = MersenneTwister(1234)
+        indexpermutations = randperm(seed, length(sortedevents))
+
+        eventq = Backtest.Events.EventQueue()
+        @test Backtest.Events.empty(eventq)
+
+        for index in indexpermutations
+            Backtest.Events.push!(eventq, sortedevents[index])
+            @test !Backtest.Events.empty(eventq)
+        end
+
+        for event in sortedevents
+            @test event == Backtest.Events.peek(eventq)
+            @test event == Backtest.Events.pop!(eventq)
+        end
+
+        @test Backtest.Events.empty(eventq)
     end
 
     # Tests the Backtest.jl API
     @testset "API" begin
-
+        #
     end
-
-
-
 end
 # Backtest.Test.backtesttest()
