@@ -572,6 +572,10 @@ module Backtest
         dtfmt::String="yyyy-mm-ddTHH:MM:SS", delim::Char=',') =
       InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
 
+    function copy(datareader::InMemoryDataReader)
+      return InMemoryDataReader(datareader.assetid, datareader.data, datareader.datetimecol)
+    end
+
     function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:TimeType}
       if nrow(datareader.data) == 0
         throw("`DataReader` has no data.")
@@ -588,7 +592,7 @@ module Backtest
     end
 
     function peek(datareader::InMemoryDataReader)::Dict{FieldId, Any}
-      toprow::NamedTuple = copy(datareader.data[1, :])
+      toprow::NamedTuple = datareader.data[1, :]
       fieldtovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
       for kvpair in zip(fieldnames(typeof(toprow)), toprow)
         fieldtovalues[string(kvpair[1])] = kvpair[2]
@@ -601,6 +605,7 @@ module Backtest
       delete!(datareader.data, 1)
       return fieldtovalues
     end
+    export copy
   end # module
 
   module Orders
@@ -724,13 +729,15 @@ module Backtest
     onorderevent!::TOE where {TOE<:Function}
     principal::PT where {PT<:Number}
   end
+  default_ondataevent(strat, event) = nothing
+  default_onorderevent(strat, event) = nothing
   function StrategyOptions(;
                           datareaders::Dict{AssetId, DR}, # data source for each asset
                           fieldoperations::Vector{FO},    # field operations to be performed
                           start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
                           endtime::ET,                    # end time for the backtest
                           numlookbackbars::Integer=-1,    # number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
-                          tradinginterval::TTI=Minute(390), # how much time there is between the start of two consecutive bars
+                          tradinginterval::TTI=Minute(390), # how much time there is between the start of a bar
                           verbosity::Type=NOVERBOSITY,     # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
                           datadelay::DDT=Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
                           messagelatency::ODT=Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
@@ -740,8 +747,8 @@ module Backtest
                           lowcol::String="low",           # name of low column
                           closecol::String="close",       # name of close column
                           volumecol::String="volume",     # name of volume column
-                          ondataevent::Function=(dataevent->nothing), # user-defined function that performs logic when data is received
-                          onorderevent::Function=(orderevent->nothing), # user-defined function that performs logic when an order event is received
+                          ondataevent::Function=default_ondataevent, # user-defined function that performs logic when data is received
+                          onorderevent::Function=default_onorderevent, # user-defined function that performs logic when an order event is received
                           principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
                           ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
                           ST<:TimeType, ET<:TimeType, TTI<:TimePeriod,
@@ -768,6 +775,7 @@ module Backtest
     assetids::Vector{AssetId}
     portfolio::Portfolio
     lattice::CalcLattice
+    barstarttimes::Vector{DateTime}
     curbarstarttime::DateTime
     curtime::DateTime
     curbarindex::Integer
@@ -796,6 +804,7 @@ module Backtest
       assetids,
       Portfolio(options.principal),
       lattice,
+      Vector{DateTime}(),
       options.start,
       options.start,
       0
@@ -857,7 +866,7 @@ module Backtest
     end
   end
 
-  function preparedatareaders!(datareaders::Dict{AssetId, DR}, time::DateTime, datetimecol::DTCT) where {DR<:AbstractDataReader, DTCT<:AbstractString}
+  function preparedatareaders!(datareaders::Dict{AssetId, DR}, starttime::DateTime, datetimecol::DTCT) where {DR<:AbstractDataReader, DTCT<:AbstractString}
     """Fast forward each data reader, so that they're all able to read bars from
     the same starting point."""
     if length(keys(datareaders)) == 0
@@ -866,7 +875,7 @@ module Backtest
     end
 
     for assetid in keys(datareaders)
-      fastforward!(datareaders[assetid], time)
+      fastforward!(datareaders[assetid], starttime)
     end
   end
 
@@ -1122,7 +1131,7 @@ module Backtest
 
   ## Main interface functions ##
   ### Main Function ###
-  function run(stratoptions::StrategyOptions)
+  function run(stratoptions::StrategyOptions)::Strategy
     # Build the strategy
     strat = Strategy(stratoptions)
 
@@ -1133,15 +1142,20 @@ module Backtest
     end
 
     # Finish the backtest
-    onend(strat)
+    return strat
   end
 
   module Utils
-    using ..Ids: AssetId, FieldId
-    using ...Backtest: Strategy, numbarsavailable, data, log, NOVERBOSITY
+    import ..Ids: AssetId, FieldId
+    import ..AbstractFields: AbstractFieldOperation
+    import ..DataReaders: fastforward!, popfirst!, AbstractDataReader, peek
+    import ..DataReaders
+    import ...Backtest: Strategy, numbarsavailable, data, log, NOVERBOSITY, run, StrategyOptions, getalldata
+    import JSON: json
+    import DataStructures: OrderedDict
+    import Dates: TimeType, DateTime, TimePeriod, Second
 
-
-    # Logic for crossover events #
+    # Logic for crossover events
     function _cross(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId, over::Bool)::Bool
       """Determines if field `fielda` has "crossed over" field `fieldb` in the most recent
       bar. If `over`, then this will return true if fields `a` and `b` are equal, and then `a`
@@ -1162,11 +1176,97 @@ module Backtest
       end
     end
 
-    crossover(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId) =
-      _cross(strat, assetid, fielda, fieldb, true)
+    function crossover(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId)
+      return _cross(strat, assetid, fielda, fieldb, true)
+    end
 
-    crossunder(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId) =
-      _cross(strat, assetid, fielda, fieldb, false)
+    function crossunder(strat::Strategy, assetid::AssetId, fielda::FieldId, fieldb::FieldId)
+      return _cross(strat, assetid, fielda, fieldb, false)
+    end
+
+    # Logic for writing data to a CSV
+
+    function writejson(outputfile::OFT;
+        datareaders::Dict{AssetId, DR}, # data source for each asset
+        fieldoperations::Vector{FO},    # field operations to be performed
+        start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
+        endtime::ET,                    # end time for the backtest
+        tradinginterval::TTI=Minute(390), # how much time there is between the start of a bars
+        datetimecol::String="datetime", # name of datetime column
+        opencol::String="open",         # name of open column
+        highcol::String="high",         # name of high column
+        lowcol::String="low",           # name of low column
+        closecol::String="close",       # name of close column
+        volumecol::String="volume",     # name of volume column
+        ) where { OFT<:AbstractString, DR<:AbstractDataReader,
+        FO<:AbstractFieldOperation, ST<:TimeType, ET<:TimeType, TTI<:TimePeriod}
+
+
+      # DataReader copy to be used later
+      adatareaderkey = pop!(Set(keys(datareaders)))
+      println(typeof(datareaders[adatareaderkey]))
+      adatareader = DataReaders.copy(datareaders[adatareaderkey])
+
+      # Run the empty backtest with all bars stored, no verbosity, no latency, and no principal
+      stratoptions = StrategyOptions(
+        datareaders=datareaders,
+        fieldoperations=fieldoperations,
+        numlookbackbars=-1,
+        start=start,
+        endtime=endtime,
+        tradinginterval=tradinginterval,
+        verbosity=NOVERBOSITY,
+        datadelay=Second(0),
+        messagelatency=Second(0),
+        datetimecol=datetimecol,
+        opencol=opencol,
+        highcol=highcol,
+        lowcol=lowcol,
+        closecol=closecol,
+        volumecol=volumecol,
+        principal=0
+      )
+      completedstrat = run(stratoptions)
+
+      # # Create a massive JSON object
+      # fastforward!(adatareader, start)
+
+      ## Iterate over each date (a do-while loop)
+      allstratdata = getalldata(completedstrat)
+
+      alljsondata = OrderedDict{DateTime, Dict{AssetId, Dict{FieldId, Any}}}()
+      curbarindex = 1
+      for curbarindex in 1:length(allstratdata)
+        dt = popfirst!(adatareader)[datetimecol]
+        # println(endtime)
+        if dt >= endtime
+          break
+        else
+          thisbardata = allstratdata[curbarindex]
+          # println(thisbardata)
+          # println("\n\n")
+          alljsondata[dt] = Dict{AssetId, Dict{FieldId, Any}}()
+          for assetid in names(thisbardata, 1)
+            # println(assetid)
+            alljsondata[dt][assetid] = Dict{FieldId, Any}()
+            for fieldid in names(thisbardata, 2)
+              # println(fieldid)
+              alljsondata[dt][assetid][fieldid] = thisbardata[assetid, fieldid]
+            end
+          end
+          curbarindex += 1
+        end
+      end
+
+      # Write all data JSON object to the given file
+      jsonstring = json(alljsondata)
+      open(outputfile, "w") do f
+        write(f, jsonstring)
+      end
+
+      return
+    end
+
   end # module
 
 

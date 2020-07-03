@@ -3,7 +3,6 @@ module test
 using Random
 using Dates
 
-using Backtest: Strategy
 using Backtest.Ids: AssetId
 using Backtest.Engine: CalcLattice, addfields!, newbar!
 using Backtest.ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore, Rank, Returns, LogReturns
@@ -11,7 +10,7 @@ using Backtest.Events: FieldCompletedProcessingEvent, AbstractOrderEvent
 using Backtest.DataReaders: InMemoryDataReader
 using Backtest.Orders: MarketOrder, LimitOrder
 using Backtest: Strategy, StrategyOptions, run, order!, log, INFO, TRANSACTIONS, NOVERBOSITY
-using Backtest.Utils: crossover, crossunder
+using Backtest.Utils: crossover, crossunder, writejson
 
 #
 # function enginetest()
@@ -124,6 +123,7 @@ function bttest()
 
   function onorder(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
   end
+
   stratoptions = StrategyOptions(
     datareaders=datareaders,
     fieldoperations=fieldoperations,
@@ -140,13 +140,29 @@ function bttest()
     lowcol=l,
     closecol=c,
     volumecol=v,
-    ondataevent=ondata,
-    onorderevent=onorder,
+    # ondataevent=ondata,
+    # onorderevent=onorder,
     principal=1_000
   )
 
-  ## Run the backtest ##
+  # Run the backtest ##
   @time run(stratoptions)
+
+  # # Test running a data-only job
+  # jsonfile = "jsondata.json"
+  # @time writejson(jsonfile;
+  #   datareaders=datareaders,
+  #   fieldoperations=fieldoperations,
+  #   start=Dates.DateTime(2015, 7, 8, 0, 0),
+  #   endtime=Dates.DateTime(2015, 7, 17, 3, 35),
+  #   tradinginterval=Dates.Minute(1),
+  #   datetimecol=dt,
+  #   opencol=o,
+  #   highcol=h,
+  #   lowcol=l,
+  #   closecol=c,
+  #   volumecol=v,
+  # )
 
 end
 #
