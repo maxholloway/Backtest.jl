@@ -183,8 +183,7 @@ struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOper
     @testset "DataReaders" begin
         # Generate some data that spans 10 files with 1000 entries each
         nfiles = 10
-        barsperfile = 1440
-        drift = 1.001
+        barsperfile = 5
 
         basedate = DateTime(1)
         dates = [basedate + Day(i) for i = 1:nfiles]
