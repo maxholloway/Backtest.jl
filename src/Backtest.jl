@@ -524,14 +524,15 @@ module Backtest
     import DataFrames: DataFrame, nrow, DataFrame!
     import ..Exceptions: AbstractMethodError, DateTooEarlyError, DateTooFarOutError
     import ..Ids: AssetId, FieldId
+    import Base.copy
 
     abstract type AbstractDataReader end
-    function fastforward!(datareader::AbstractDataReader, time::T) where {T<:TimeType}
-      """Function that moves datareader forward until the current
-      bar is at or after `time`. This is part of the AbstractDataReader
-      interface."""
-      throw(AbstractMethodError(AbstractDataReader, fastforward!))
-    end
+    # function fastforward!(datareader::AbstractDataReader, time::T) where {T<:TimeType}
+    #   """Function that moves datareader forward until the current
+    #   bar is at or after `time`. This is part of the AbstractDataReader
+    #   interface."""
+    #   throw(AbstractMethodError(AbstractDataReader, fastforward!))
+    # end
 
     mutable struct InMemoryDataReader <: AbstractDataReader
       """Stores all asset data in memory."""
@@ -540,10 +541,62 @@ module Backtest
       datetimecol::AS where {AS<:AbstractString}
     end
 
+    mutable struct PerFileDataReader <: AbstractDataReader
+      """Stores a single file in memory at a time."""
+      assetid::AssetId
+      sources::Vector{ST} where {ST<:AbstractString}
+      datetimecol::DTCT where {DTCT<:AbstractString}
+      dtfmt::FT where {FT<:AbstractString}
+      delim::Char
+      curfiledata::DataFrame
+    end
+
+    module Internal
+      using ...Ids: FieldId
+      using ..DataReaders: InMemoryDataReader, PerFileDataReader
+      using DataFrames: DataFrame, nrow, DataFrame!
+      using CSV: File
+      function step!(datareader::InMemoryDataReader)
+        datareader.data = datareader.data[2:nrow(datareader.data), :]
+      end
+
+      function step!(datareader::PerFileDataReader)
+        prepfilefornext!(datareader)
+        datareader.curfiledata = datareader.curfiledata[2:nrow(datareader.curfiledata), :]
+      end
+
+      function prepfilefornext!(datareader::PerFileDataReader)
+        """Since the PerFileDataReader iterates over a particular file
+        (`curfiledata`) and potentially many files (`sources`), we must
+        ensure that if we've complete a single file, we update `curfiledata`
+        with the data from the next file."""
+        if isempty(datareader.curfiledata) && isempty(datareader.sources)
+          throw("Attempted to read data from an empty datareader.")
+        elseif isempty(datareader.curfiledata)
+          # load next file of data
+          nextfile = popfirst!(datareader.sources)
+          datareader.curfiledata = File(nextfile, delim=datareader.delim) |> DataFrame!
+        end
+      end
+
+      function peek(df::DataFrame)
+        """Return the top row of a dataframe in Dict format."""
+        toprow::NamedTuple = df[1, :]
+        nametovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
+        for kvpair in zip(fieldnames(typeof(toprow)), toprow)
+          nametovalues[string(kvpair[1])] = kvpair[2]
+        end
+        return nametovalues
+      end
+
+    end # module
+
+    using .Internal
+
     function InMemoryDataReader(assetid::String, sources::Vector{S};
-                  datetimecol::String="datetime",
-                  dtfmt::String="yyyy-mm-ddTHH:MM:SS",
-                  delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
+        datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS",
+        delim::Char=',')::InMemoryDataReader where {S<:AbstractString}
       if length(sources) == 0
         throw("`sources` must have at least one element.")
       end
@@ -568,36 +621,65 @@ module Backtest
       return InMemoryDataReader(assetid, alldata, datetimecol)
     end
 
-    InMemoryDataReader(assetid::String, source::String; datetimecol::String="datetime",
-        dtfmt::String="yyyy-mm-ddTHH:MM:SS", delim::Char=',') =
-      InMemoryDataReader(assetid, [source], datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
+    function PerFileDataReader(assetid::String, sources::Vector{S};
+        datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS",
+        delim::Char=',')::PerFileDataReader where {S<:AbstractString}
+      if length(sources) == 0
+        throw("`sources` must have at least one element.")
+      end
+      curfiledata = DataFrame()
 
-    function copy(datareader::InMemoryDataReader)
-      return InMemoryDataReader(datareader.assetid, datareader.data, datareader.datetimecol)
+      return PerFileDataReader(assetid, Base.copy(sources), datetimecol, dtfmt, delim, curfiledata)
     end
 
-    function fastforward!(datareader::InMemoryDataReader, time::T) where {T<:TimeType}
-      if nrow(datareader.data) == 0
-        throw("`DataReader` has no data.")
-      elseif datareader.data[1, datareader.datetimecol] > time
-        throw(DateTooEarlyError(time, datareader.assetid))
-      end
-      while nrow(datareader.data) > 0 && datareader.data[1, datareader.datetimecol] < time
-        datareader.data = datareader.data[2:nrow(datareader.data), :]
+    function InMemoryDataReader(assetid::String, source::String;
+        datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS",
+        delim::Char=',')
+
+        return InMemoryDataReader(assetid, [source];
+          datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
       end
 
-      if nrow(datareader.data) == 0
+    function PerFileDataReader(assetid::String, source::S;
+        datetimecol::String="datetime",
+        dtfmt::String="yyyy-mm-ddTHH:MM:SS",
+        delim::Char=',')::PerFileDataReader where {S<:AbstractString}
+      return PerFileDataReader(assetid, [source]; datetimecol=datetimecol, dtfmt=dtfmt, delim=delim)
+    end
+
+    function copy(dr::InMemoryDataReader)
+      return InMemoryDataReader(dr.assetid, dr.data, dr.datetimecol)
+    end
+
+    function copy(dr::PerFileDataReader)
+      return PerFileDataReader(dr.assetid, dr.sources, dr.datetimecol, dr.dtfmt, dr.delim, dr.curfiledata)
+    end
+
+    function fastforward!(datareader::DRT, time::T) where {DRT<:AbstractDataReader, T<:TimeType}
+      curtime() = peek(datareader)[datareader.datetimecol]
+      if empty(datareader)
+        throw("`DataReader` has no data.")
+      elseif curtime() > time
+        throw(DateTooEarlyError(time, datareader.assetid))
+      end
+      while !empty(datareader) && curtime() < time
+        Internal.step!(datareader)
+      end
+
+      if empty(datareader)
         throw(DateTooFarOutError(time, datareader.assetid))
       end
     end
 
     function peek(datareader::InMemoryDataReader)::Dict{FieldId, Any}
-      toprow::NamedTuple = datareader.data[1, :]
-      fieldtovalues::Dict{FieldId, Any} = Dict{FieldId, Any}()
-      for kvpair in zip(fieldnames(typeof(toprow)), toprow)
-        fieldtovalues[string(kvpair[1])] = kvpair[2]
-      end
-      return fieldtovalues
+      return Internal.peek(datareader.data)
+    end
+
+    function peek(datareader::PerFileDataReader)::Dict{FieldId, Any}
+      Internal.prepfilefornext!(datareader)
+      return Internal.peek(datareader.curfiledata)
     end
 
     function popfirst!(datareader::InMemoryDataReader)::Dict{FieldId, Any}
@@ -605,6 +687,19 @@ module Backtest
       delete!(datareader.data, 1)
       return fieldtovalues
     end
+
+    function popfirst!(datareader::PerFileDataReader)::Dict{FieldId, Any}
+      fieldtovalues = peek(datareader)
+      delete!(datareader.curfiledata, 1)
+      return fieldtovalues
+    end
+
+    empty(datareader::InMemoryDataReader) = isempty(datareader.data)
+
+    function empty(datareader::PerFileDataReader)
+      return isempty(datareader.curfiledata) && isempty(datareader.sources)
+    end
+
     export copy
   end # module
 
@@ -1140,7 +1235,7 @@ module Backtest
       genesisfielddata = loadgenesisdata!(strat)
       runnextbar!(strat, genesisfielddata)
     end
-
+    onend(strat)
     # Finish the backtest
     return strat
   end
@@ -1184,8 +1279,7 @@ module Backtest
       return _cross(strat, assetid, fielda, fieldb, false)
     end
 
-    # Logic for writing data to a CSV
-
+    # Logic for writing data to a JSON file
     function writejson(outputfile::OFT;
         datareaders::Dict{AssetId, DR}, # data source for each asset
         fieldoperations::Vector{FO},    # field operations to be performed
@@ -1266,7 +1360,6 @@ module Backtest
 
       return
     end
-
   end # module
 
 
