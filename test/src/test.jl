@@ -80,8 +80,8 @@ function getexamplecryptodatareader(symbol::String)
   # daysofmonth = ["06", "07", "08", "09", "10", "13", "14", "15", "16", "17", "18", "19", ""]
   dayofmonthtopath = (dom -> "$basepath/2015-07-$(dom).csv")
   sources = [dayofmonthtopath(dom) for dom in daysofmonth]
-  return InMemoryDataReader(symbol, sources, datetimecol="Datetime")
-  # return PerFileDataReader(symbol, sources, datetimecol="Datetime")
+  # return InMemoryDataReader(symbol, sources, datetimecol="Datetime")
+  return PerFileDataReader(symbol, sources, datetimecol="Datetime")
 end
 
 function datareadertest()
@@ -131,11 +131,12 @@ function bttest()
     fieldoperations=fieldoperations,
     numlookbackbars=-1,
     start=Dates.DateTime(2015, 7, 1, 0, 0),
-    endtime=Dates.DateTime(2015, 7, 30, 0, 0),
+    endtime=Dates.DateTime(2015, 7, 10, 0, 0),
     tradinginterval=Dates.Minute(1),
     verbosity=NOVERBOSITY,
     datadelay=Dates.Second(5),
     messagelatency=Dates.Second(3),
+    fieldoptimeout=Dates.Second(2),
     datetimecol=dt,
     opencol=o,
     highcol=h,
@@ -148,9 +149,10 @@ function bttest()
   )
 
   # Run the backtest ##
-  @time run(stratoptions)
+  @time begin
+    run(stratoptions)
+  end
 
-  print()
   # # Test running a data-only job
   # jsonfile = "jsondata.json"
   # @time writejson(jsonfile;
@@ -166,7 +168,5 @@ function bttest()
   #   closecol=c,
   #   volumecol=v,
   # )
-
 end
-#
 end

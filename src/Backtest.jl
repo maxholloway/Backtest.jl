@@ -814,6 +814,7 @@ module Backtest
     verbosity::DataType
     datadelay::DDT where {DDT<:Period}
     messagelatency::ODT where {ODT<:Period}
+    fieldoptimeout::FOTOT where {FOTOT<:Period}
     datetimecol::String
     opencol::String
     highcol::String
@@ -836,6 +837,7 @@ module Backtest
                           verbosity::Type=NOVERBOSITY,     # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
                           datadelay::DDT=Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
                           messagelatency::ODT=Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
+                          fieldoptimeout::FOTOT=Millisecond(100), # how much time until the field operation computatio times out; note that field operations are computed before the user receives data
                           datetimecol::String="datetime", # name of datetime column
                           opencol::String="open",         # name of open column
                           highcol::String="high",         # name of high column
@@ -847,11 +849,11 @@ module Backtest
                           principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
                           ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
                           ST<:TimeType, ET<:TimeType, TTI<:TimePeriod,
-                          DDT<:Period, ODT<:Period, PT<:Number }
+                          DDT<:Period, ODT<:Period, FOTOT<:Period, PT<:Number }
     return StrategyOptions(datareaders, fieldoperations, numlookbackbars,
-      start, endtime, tradinginterval, verbosity, datadelay, messagelatency, datetimecol,
-      opencol, highcol, lowcol, closecol, volumecol,  ondataevent, onorderevent,
-      principal
+      start, endtime, tradinginterval, verbosity, datadelay, messagelatency, fieldoptimeout,
+      datetimecol, opencol, highcol, lowcol, closecol, volumecol,  ondataevent,
+      onorderevent, principal
     )
   end
 
@@ -1124,13 +1126,13 @@ module Backtest
     realend = now()
 
     computationtime = realend - realstart
-    timeaftercomputation = strat.curtime + computationtime
-    if timeaftercomputation > curbarendtime(strat)
-      throw(string("Lattice computations (i.e. computations on pre-defined",
-      " fields) took more than the available time in the bar to compute fields."))
+    if computationtime > strat.options.fieldoptimeout
+      throw(string("Field operation computations (i.e. computations on pre-defined",
+      " fields) took more than the allowed time; consider increasing `fieldoptimeout`",
+      " from its current value of $(strat.options.fieldoptimeout)."))
     end
 
-    push!(strat.events, FieldCompletedProcessingEvent(timeaftercomputation))
+    push!(strat.events, FieldCompletedProcessingEvent(strat.curtime+computationtime))
   end
 
   function processevent!(strat::Strategy, event::T) where {T<:AbstractEvent}
