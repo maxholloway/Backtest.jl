@@ -4,9 +4,8 @@ fakedata
 stash
 Untitled*.ipynb
 
-# Inner git repos used for dev
-*/.git/*
-src/updaterepos.sh
+# Documenter stuff
+docs/build/
 
 # Environment tracking
 *__pycache__*
