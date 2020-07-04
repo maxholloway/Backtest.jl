@@ -76,7 +76,7 @@ using Backtest.Utils: crossover, crossunder, writejson
 function getexamplecryptodatareader(symbol::String)
   # basepath = "../fakedata/stocks/minute/$symbol"
   basepath = "../fakedata/crypto/$symbol"
-  daysofmonth = [lpad(i, 2, "0") for i=1:30]
+  daysofmonth = [lpad(i, 2, "0") for i=1:10]
   # daysofmonth = ["06", "07", "08", "09", "10", "13", "14", "15", "16", "17", "18", "19", ""]
   dayofmonthtopath = (dom -> "$basepath/2015-07-$(dom).csv")
   sources = [dayofmonthtopath(dom) for dom in daysofmonth]
@@ -112,61 +112,61 @@ function bttest()
     LogReturns("LogReturns-Close-3", c, 3),
   ]
 
-  function ondata(strat::Strategy, event::FieldCompletedProcessingEvent)
-    # order!(strat, MarketOrder("LTCUSDT", 1))
-    # order!(strat, LimitOrder("LTCUSDT", -1, 10))
-    fast, slow = "SMA30-Close", "SMA60-Close"
-    if crossover(strat, "A", fast, slow)
-      order!(strat, MarketOrder("A", .1))
-    elseif crossunder(strat, "A", fast, slow)
-      order!(strat, MarketOrder("A", -.1))
-    end
-  end
-
-  function onorder(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
-  end
-
-  stratoptions = StrategyOptions(
-    datareaders=datareaders,
-    fieldoperations=fieldoperations,
-    numlookbackbars=-1,
-    start=Dates.DateTime(2015, 7, 1, 0, 0),
-    endtime=Dates.DateTime(2015, 7, 10, 0, 0),
-    tradinginterval=Dates.Minute(1),
-    verbosity=NOVERBOSITY,
-    datadelay=Dates.Second(5),
-    messagelatency=Dates.Second(3),
-    fieldoptimeout=Dates.Second(2),
-    datetimecol=dt,
-    opencol=o,
-    highcol=h,
-    lowcol=l,
-    closecol=c,
-    volumecol=v,
-    ondataevent=ondata,
-    onorderevent=onorder,
-    principal=1_000
-  )
-
-  # Run the backtest ##
-  @time begin
-    run(stratoptions)
-  end
-
-  # # Test running a data-only job
-  # jsonfile = "jsondata.json"
-  # @time writejson(jsonfile;
+  # function ondata(strat::Strategy, event::FieldCompletedProcessingEvent)
+  #   # order!(strat, MarketOrder("LTCUSDT", 1))
+  #   # order!(strat, LimitOrder("LTCUSDT", -1, 10))
+  #   fast, slow = "SMA30-Close", "SMA60-Close"
+  #   if crossover(strat, "A", fast, slow)
+  #     order!(strat, MarketOrder("A", .1))
+  #   elseif crossunder(strat, "A", fast, slow)
+  #     order!(strat, MarketOrder("A", -.1))
+  #   end
+  # end
+  #
+  # function onorder(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
+  # end
+  #
+  # stratoptions = StrategyOptions(
   #   datareaders=datareaders,
   #   fieldoperations=fieldoperations,
-  #   start=Dates.DateTime(2015, 7, 8, 0, 0),
-  #   endtime=Dates.DateTime(2015, 7, 17, 3, 35),
+  #   numlookbackbars=-1,
+  #   start=Dates.DateTime(2015, 7, 1, 0, 0),
+  #   endtime=Dates.DateTime(2015, 7, 10, 0, 0),
   #   tradinginterval=Dates.Minute(1),
+  #   verbosity=NOVERBOSITY,
+  #   datadelay=Dates.Second(5),
+  #   messagelatency=Dates.Second(3),
+  #   fieldoptimeout=Dates.Second(2),
   #   datetimecol=dt,
   #   opencol=o,
   #   highcol=h,
   #   lowcol=l,
   #   closecol=c,
   #   volumecol=v,
+  #   ondataevent=ondata,
+  #   onorderevent=onorder,
+  #   principal=1_000
   # )
+  #
+  # # Run the backtest ##
+  # @time begin
+  #   run(stratoptions)
+  # end
+
+  # Test running a data-only job
+  jsonfile = "jsondata.json"
+  @time writejson(jsonfile;
+    datareaders=datareaders,
+    fieldoperations=fieldoperations,
+    start=Dates.DateTime(2015, 7, 8, 10, 0),
+    endtime=Dates.DateTime(2015, 7, 8, 10, 2),
+    tradinginterval=Dates.Minute(1),
+    datetimecol=dt,
+    opencol=o,
+    highcol=h,
+    lowcol=l,
+    closecol=c,
+    volumecol=v,
+  )
 end
 end
