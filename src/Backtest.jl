@@ -787,7 +787,7 @@ module Backtest
   import .DataReaders: AbstractDataReader
   import .DataReaders # required in order to resolve `peek` collision
 
-  ## Verbosity Levels ##
+  ## Type Declarations ##
   abstract type AbstractVerbosity end
   abstract type INFO <: AbstractVerbosity end
   abstract type TRANSACTIONS <: INFO end
@@ -795,7 +795,6 @@ module Backtest
   abstract type WARNING <: DEBUG end
   abstract type NOVERBOSITY <: WARNING end
 
-  ## Declare Types ##
   struct StrategyOptions
     datareaders::Dict{AssetId, DR} where {DR<:AbstractDataReader}
     fieldoperations::Vector{FO} where {FO<:AbstractFieldOperation}
@@ -1147,7 +1146,6 @@ module Backtest
         strat.portfolio.value = strat.portfolio.buyingpower + equityvalue
       end
     end
-
   end
 
   # TODO: replace with an arg in `StrategyOptions`
@@ -1364,5 +1362,5 @@ module Backtest
     end
   end # module
 
-  export run, data, numbarsavailable
+  export StrategyOptions, run, order!, getalldata, data, numbarsavailable, log
 end
