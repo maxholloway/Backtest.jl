@@ -217,13 +217,19 @@ struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOper
                         "",
                         filenames,
                         datetimecol="DateTime",
-                        dtfmt="yyyy-mm-ddTHH:MM:SS")
+                        dtfmt="yyyy-mm-ddTHH:MM:SS"),
+                    Backtest.DataReaders.PerFileDataReader(
+                        "",
+                        filenames,
+                        datetimecol="DateTime",
+                        dtfmt="yyyy-mm-ddTHH:MM:SS"
+                    )
                 ]
             end
 
             # end
 
-            function runthroughalldatareaders(datareader)
+            function runthroughdatareader(datareader)
                 for i in 1:nfiles
                     for j in 1:barsperfile
                         peekval =  Backtest.DataReaders.peek(datareader)
@@ -249,17 +255,14 @@ struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOper
                 @test Backtest.DataReaders.peek(datareader)["DateTime"] > basedate
 
                 # Test that peek gives the expected result
-                @test runthroughalldatareaders(datareader)
+                @test runthroughdatareader(datareader)
 
             end
 
             for datareader in makedatareaders()
                 # Test that that fastforward throws an exception when the given date is too late
                 @test_throws Backtest.Exceptions.DateTooFarOutError Backtest.DataReaders.fastforward!(datareader, DateTime(2030))
-
             end
-
-
         finally
             rm(datadir, recursive=true) # clean up
         end
@@ -303,7 +306,7 @@ struct UndefCSFieldOp <: Backtest.AbstractFields.AbstractCrossSectionalFieldOper
 
         @test Backtest.Events.empty(eventq)
     end
-
+    #
     # Tests the Backtest.jl API
     @testset "API" begin
         # TODO: Write tests for the backtest API

@@ -7,7 +7,7 @@ using Backtest.Ids: AssetId
 using Backtest.Engine: CalcLattice, addfields!, newbar!
 using Backtest.ConcreteFields: Open, High, Low, Close, Volume, SMA, ZScore, Rank, Returns, LogReturns
 using Backtest.Events: FieldCompletedProcessingEvent, AbstractOrderEvent
-using Backtest.DataReaders: InMemoryDataReader
+using Backtest.DataReaders: InMemoryDataReader, PerFileDataReader, AbstractDataReader
 using Backtest.Orders: MarketOrder, LimitOrder
 using Backtest: Strategy, StrategyOptions, run, order!, log, INFO, TRANSACTIONS, NOVERBOSITY
 using Backtest.Utils: crossover, crossunder, writejson
@@ -74,12 +74,14 @@ using Backtest.Utils: crossover, crossunder, writejson
 # end
 #
 function getexamplecryptodatareader(symbol::String)
-  basepath = "../fakedata/stocks/minute/$symbol"
-  # daysofmonth = [lpad(i, 2, "0") for i=1:6]
-  daysofmonth = ["06", "07", "08", "09", "10", "13", "14", "15", "16", "17"]
+  # basepath = "../fakedata/stocks/minute/$symbol"
+  basepath = "../fakedata/crypto/$symbol"
+  daysofmonth = [lpad(i, 2, "0") for i=1:30]
+  # daysofmonth = ["06", "07", "08", "09", "10", "13", "14", "15", "16", "17", "18", "19", ""]
   dayofmonthtopath = (dom -> "$basepath/2015-07-$(dom).csv")
   sources = [dayofmonthtopath(dom) for dom in daysofmonth]
   return InMemoryDataReader(symbol, sources, datetimecol="Datetime")
+  # return PerFileDataReader(symbol, sources, datetimecol="Datetime")
 end
 
 function datareadertest()
@@ -92,7 +94,7 @@ end
 function bttest()
   ## Make the data readers ##
   assetids = ["A", "B", "C"]
-  datareaders = Dict{AssetId, InMemoryDataReader}()
+  datareaders = Dict{AssetId, AbstractDataReader}()
   for assetid in assetids
     datareaders[assetid] = getexamplecryptodatareader(assetid)
   end
@@ -115,9 +117,9 @@ function bttest()
     # order!(strat, LimitOrder("LTCUSDT", -1, 10))
     fast, slow = "SMA30-Close", "SMA60-Close"
     if crossover(strat, "A", fast, slow)
-      order!(strat, MarketOrder("A", 1))
+      order!(strat, MarketOrder("A", .1))
     elseif crossunder(strat, "A", fast, slow)
-      order!(strat, MarketOrder("A", -1))
+      order!(strat, MarketOrder("A", -.1))
     end
   end
 
@@ -127,9 +129,9 @@ function bttest()
   stratoptions = StrategyOptions(
     datareaders=datareaders,
     fieldoperations=fieldoperations,
-    numlookbackbars=60,
-    start=Dates.DateTime(2015, 7, 7, 0, 0),
-    endtime=Dates.DateTime(2015, 7, 12, 0, 0),
+    numlookbackbars=-1,
+    start=Dates.DateTime(2015, 7, 1, 0, 0),
+    endtime=Dates.DateTime(2015, 7, 30, 0, 0),
     tradinginterval=Dates.Minute(1),
     verbosity=NOVERBOSITY,
     datadelay=Dates.Second(5),
@@ -140,14 +142,15 @@ function bttest()
     lowcol=l,
     closecol=c,
     volumecol=v,
-    # ondataevent=ondata,
-    # onorderevent=onorder,
+    ondataevent=ondata,
+    onorderevent=onorder,
     principal=1_000
   )
 
   # Run the backtest ##
   @time run(stratoptions)
 
+  print()
   # # Test running a data-only job
   # jsonfile = "jsondata.json"
   # @time writejson(jsonfile;
