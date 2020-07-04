@@ -527,12 +527,6 @@ module Backtest
     import Base.copy
 
     abstract type AbstractDataReader end
-    # function fastforward!(datareader::AbstractDataReader, time::T) where {T<:TimeType}
-    #   """Function that moves datareader forward until the current
-    #   bar is at or after `time`. This is part of the AbstractDataReader
-    #   interface."""
-    #   throw(AbstractMethodError(AbstractDataReader, fastforward!))
-    # end
 
     mutable struct InMemoryDataReader <: AbstractDataReader
       """Stores all asset data in memory."""
@@ -654,7 +648,7 @@ module Backtest
     end
 
     function copy(dr::PerFileDataReader)
-      return PerFileDataReader(dr.assetid, dr.sources, dr.datetimecol, dr.dtfmt, dr.delim, dr.curfiledata)
+      return PerFileDataReader(dr.assetid, Base.copy(dr.sources), dr.datetimecol, dr.dtfmt, dr.delim, dr.curfiledata)
     end
 
     function fastforward!(datareader::DRT, time::T) where {DRT<:AbstractDataReader, T<:TimeType}
@@ -745,7 +739,7 @@ module Backtest
 
     struct OrderAckEvent <: AbstractOrderEvent
       time::T where {T<:TimeType} # when the ack is received on our end
-      orderid::String
+      orderid::OrderId
     end
 
     struct OrderFillEvent <: AbstractOrderEvent
@@ -781,18 +775,16 @@ module Backtest
 
   ## Imports
   import Dates: DateTime, TimeType, Minute, Millisecond, Period,
-                TimePeriod, format, epochms2datetime, datetime2epochms, now
+                TimePeriod, format
   import UUIDs: uuid4
   import NamedArrays: NamedArray
   import .Ids: AssetId, FieldId, OrderId
   import .AbstractFields: AbstractFieldOperation
-  import .ConcreteFields: Open, High, Low, Close, Volume
-  import .Events: EventQueue, AbstractEvent, NewBarEvent, FieldCompletedProcessingEvent,
-        OrderFillEvent, AbstractOrderEvent, OrderAckEvent, push!, empty, peek, pop!
+  import .Events: EventQueue, FieldCompletedProcessingEvent, OrderAckEvent, push!, empty
 
   using .Orders
-  import .Engine: CalcLattice, addfields!, newbar!, getalldata, data, numbarsavailable
-  import .DataReaders: AbstractDataReader, fastforward!, popfirst!
+  import .Engine: CalcLattice, getalldata, data, numbarsavailable
+  import .DataReaders: AbstractDataReader
   import .DataReaders # required in order to resolve `peek` collision
 
   ## Verbosity Levels ##
@@ -803,7 +795,7 @@ module Backtest
   abstract type WARNING <: DEBUG end
   abstract type NOVERBOSITY <: WARNING end
 
-  ## Concrete types ##
+  ## Declare Types ##
   struct StrategyOptions
     datareaders::Dict{AssetId, DR} where {DR<:AbstractDataReader}
     fieldoperations::Vector{FO} where {FO<:AbstractFieldOperation}
@@ -824,37 +816,6 @@ module Backtest
     ondataevent!::TODE where {TODE<:Function}
     onorderevent!::TOE where {TOE<:Function}
     principal::PT where {PT<:Number}
-  end
-  default_ondataevent(strat, event) = nothing
-  default_onorderevent(strat, event) = nothing
-  function StrategyOptions(;
-                          datareaders::Dict{AssetId, DR}, # data source for each asset
-                          fieldoperations::Vector{FO},    # field operations to be performed
-                          start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
-                          endtime::ET,                    # end time for the backtest
-                          numlookbackbars::Integer=-1,    # number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
-                          tradinginterval::TTI=Minute(390), # how much time there is between the start of a bar
-                          verbosity::Type=NOVERBOSITY,     # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
-                          datadelay::DDT=Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
-                          messagelatency::ODT=Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
-                          fieldoptimeout::FOTOT=Millisecond(100), # how much time until the field operation computatio times out; note that field operations are computed before the user receives data
-                          datetimecol::String="datetime", # name of datetime column
-                          opencol::String="open",         # name of open column
-                          highcol::String="high",         # name of high column
-                          lowcol::String="low",           # name of low column
-                          closecol::String="close",       # name of close column
-                          volumecol::String="volume",     # name of volume column
-                          ondataevent::Function=default_ondataevent, # user-defined function that performs logic when data is received
-                          onorderevent::Function=default_onorderevent, # user-defined function that performs logic when an order event is received
-                          principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
-                          ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
-                          ST<:TimeType, ET<:TimeType, TTI<:TimePeriod,
-                          DDT<:Period, ODT<:Period, FOTOT<:Period, PT<:Number }
-    return StrategyOptions(datareaders, fieldoperations, numlookbackbars,
-      start, endtime, tradinginterval, verbosity, datadelay, messagelatency, fieldoptimeout,
-      datetimecol, opencol, highcol, lowcol, closecol, volumecol,  ondataevent,
-      onorderevent, principal
-    )
   end
 
   mutable struct Portfolio
@@ -877,38 +838,8 @@ module Backtest
     curtime::DateTime
     curbarindex::Integer
   end
-  function Strategy(options::StrategyOptions)
-    """User-facing constructor."""
-    # Prepare the data readers
-    preparedatareaders!(options.datareaders, options.start, options.datetimecol)
 
-    # Prepare the lattice
-    assetids = [assetid for assetid in keys(options.datareaders)]
-    lattice = CalcLattice(options.numlookbackbars, assetids)
-    allfields = Vector{AbstractFieldOperation}(
-      [
-        Open(options.opencol), High(options.highcol), Low(options.lowcol),
-        Close(options.closecol), Volume(options.volumecol)
-      ]
-    )
-    append!(allfields, options.fieldoperations)
-    addfields!(lattice, allfields)
-    return Strategy(
-      options,
-      EventQueue(),
-      Dict{OrderId, Orders.AbstractOrder}(),
-      Vector{OrderId}(),
-      assetids,
-      Portfolio(options.principal),
-      lattice,
-      Vector{DateTime}(),
-      options.start,
-      options.start,
-      0
-    )
-  end
-
-  ### Data Access Functions (getters for `Engine.recentbars`) ###
+  ## Interface Functions (pt. 1) ##
   function getalldata(strat::Strategy)::Vector{NamedArray}
     Engine.getalldata(strat.lattice)
   end
@@ -954,8 +885,7 @@ module Backtest
     return numbarsavailable(strat.lattice)
   end
 
-
-  ## Utility functions ##
+  ### Etc. Function(s) ###
   function log(strat::Strategy, message::String, verbosity::Type)
     if verbosity <: strat.options.verbosity
       time = format(strat.curtime, "yyyy-mm-dd HH:MM:SS.sss")
@@ -963,29 +893,328 @@ module Backtest
     end
   end
 
-  function preparedatareaders!(datareaders::Dict{AssetId, DR}, starttime::DateTime, datetimecol::DTCT) where {DR<:AbstractDataReader, DTCT<:AbstractString}
-    """Fast forward each data reader, so that they're all able to read bars from
-    the same starting point."""
-    if length(keys(datareaders)) == 0
-      throw(string("No datareaders specified. At least one datareader must be",
-      " specified in order to run a backtest."))
+  ## End interface functions (pt. 1) ##
+
+  module Internals
+    using ...Ids: AssetId, FieldId, OrderId
+    using ...AbstractFields: AbstractFieldOperation
+    using ...ConcreteFields: Open, High, Low, Close, Volume
+    using ...Events: AbstractEvent, NewBarEvent, push!, peek, pop!,
+      FieldCompletedProcessingEvent, AbstractOrderEvent, OrderFillEvent,
+      EventQueue
+    using ...Events
+    using ...DataReaders: AbstractDataReader, popfirst!, fastforward!
+    import ...DataReaders
+    using ...Engine: CalcLattice, newbar!, addfields!
+    using ...Orders: AbstractOrder, MarketOrder
+    using ....Backtest: INFO, TRANSACTIONS, Strategy, StrategyOptions, Portfolio, log
+    using ...Backtest
+    using Dates: DateTime, TimeType, datetime2epochms, epochms2datetime, now
+    default_ondataevent(strat, event) = nothing
+    default_onorderevent(strat, event) = nothing
+
+    function Strategy(options::StrategyOptions)
+      """User-facing constructor."""
+      # Prepare the data readers
+      preparedatareaders!(options.datareaders, options.start, options.datetimecol)
+
+      # Prepare the lattice
+      assetids = [assetid for assetid in keys(options.datareaders)]
+      lattice = CalcLattice(options.numlookbackbars, assetids)
+      allfields = Vector{AbstractFieldOperation}(
+        [
+          Open(options.opencol), High(options.highcol), Low(options.lowcol),
+          Close(options.closecol), Volume(options.volumecol)
+        ]
+      )
+      append!(allfields, options.fieldoperations)
+      addfields!(lattice, allfields)
+      return Strategy(
+        options,
+        EventQueue(),
+        Dict{OrderId, AbstractOrder}(),
+        Vector{OrderId}(),
+        assetids,
+        Portfolio(options.principal),
+        lattice,
+        Vector{DateTime}(),
+        options.start,
+        options.start,
+        0
+      )
     end
 
-    for assetid in keys(datareaders)
-      fastforward!(datareaders[assetid], starttime)
+    function preparedatareaders!(datareaders::Dict{AssetId, DR}, starttime::DateTime, datetimecol::DTCT) where {DR<:AbstractDataReader, DTCT<:AbstractString}
+      """Fast forward each data reader, so that they're all able to read bars from
+      the same starting point."""
+      if length(keys(datareaders)) == 0
+        throw(string("No datareaders specified. At least one datareader must be",
+        " specified in order to run a backtest."))
+      end
+
+      for assetid in keys(datareaders)
+        fastforward!(datareaders[assetid], starttime)
+      end
     end
+
+
+    function runnextbar!(strat::Strategy, genesisfielddata::Dict{AssetId, Dict{FieldId, T}}) where {T<:Any}
+
+      # Account for new bar
+      strat.curbarindex += 1
+      strat.curbarstarttime = DateTime(genesisfielddata[strat.assetids[1]][strat.options.datetimecol])
+      strat.curtime = strat.curbarstarttime
+
+      # Fill all of the orders for the last bar; NOTE: this works due to a weird
+      # loophole from the state of the program. `runnextbar` is only invoked from
+      # inside `run`. Before calling `runnextbar!`, `run` will call `loadgenesisdata!`,
+      # which moves the datareaders forward a bar. This means that the current
+      # `peeking` bar is in fact the bar we are on. For example, if we peek into
+      # a minute-level datareader at 11:33 AM, we will see the bar data for
+      # 11:33-11:34 AM. Thus, we can call `tryfillorders!` at this point.
+      tryfillorders!(strat)
+
+      # Push the data to the queue
+      push!(strat.events, NewBarEvent(
+        strat.curtime + strat.options.datadelay,
+        genesisfielddata
+      ))
+
+      while !Events.empty(strat.events) && peek(strat.events).time < curbarendtime(strat)
+        event = pop!(strat.events)
+        processevent!(strat, event)
+      end
+      Backtest.log(strat, string("Finished running bar #", strat.curbarindex, "."), INFO)
+    end
+
+    function loadgenesisdata!(strat::Strategy)::Dict{AssetId, Dict{FieldId, Any}}
+      # Initialize genesis field data array
+      uniquedatetimes = Set([])
+      genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
+      for assetid in strat.assetids
+        genesisassetfielddata = popfirst!(strat.options.datareaders[assetid])
+        datetime = genesisassetfielddata[strat.options.datetimecol]
+        union!(uniquedatetimes, [datetime])
+        if length(uniquedatetimes) != 1
+          errormessage = "Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time."
+          Backtest.log(strat, "Error occurred: $message", DEBUG)
+          throw(message)
+        else
+          genesisfielddata[assetid] = genesisassetfielddata
+        end
+      end
+      return genesisfielddata
+    end
+
+    curbarendtime(strat::Strategy) = strat.curbarstarttime + strat.options.tradinginterval
+
+    function randomtimeininterval(left::LT, right::RT) where {LT<:TimeType, RT<:TimeType}
+      leftms = datetime2epochms(left)
+      rightms = datetime2epochms(right)
+      randms = rand(leftms:rightms)
+      return epochms2datetime(randms)
+    end
+
+    ### Methods related to event handling ###
+    function onnewbarevent!(strat::Strategy, event::NewBarEvent)
+      realstart = now()
+      newbar!(strat.lattice, event.genesisdata) # run a bar on the CalcLattice
+      realend = now()
+
+      computationtime = realend - realstart
+      if computationtime > strat.options.fieldoptimeout # TODO: add test that uses 0 second `fieldoptimeout` and ensures that it throws an error
+        throw(string("Field operation computations (i.e. computations on pre-defined",
+        " fields) took more than the allowed time; consider increasing `fieldoptimeout`",
+        " from its current value of $(strat.options.fieldoptimeout)."))
+      end
+
+      push!(strat.events, FieldCompletedProcessingEvent(strat.curtime+computationtime))
+    end
+
+    function processevent!(strat::Strategy, event::T) where {T<:AbstractEvent}
+      """Delegate particular events to their relevant event handlers."""
+      strat.curtime = event.time
+      Backtest.log(strat, "Processing `$(typeof(event))` event.", INFO)
+
+      if isa(event, NewBarEvent)
+        onnewbarevent!(strat, event)
+      elseif isa(event, FieldCompletedProcessingEvent)
+        strat.options.ondataevent!(strat, event)
+      elseif isa(event, AbstractOrderEvent)
+        Backtest.log(strat, "Order Event: $event.", TRANSACTIONS)
+        updateportfolio!(strat, event) # update the portfolio as soon as we see an order event
+        strat.options.onorderevent!(strat, event)
+      end
+    end
+
+    function tryfillorder!(strat::Strategy, order::OT)::Bool where {OT<:AbstractOrder}
+      """NOTE: ASSUMES THAT WE ARE TRYING TO FILL THE ORDER AT THE BEGINNING OF A BAR!"""
+      """Returns true iff the order is filled before then endo of the current bar."""
+      # TODO: account for transaction cost
+      if order.size == 0
+        throw("Cannot process an order with `size`=0.")
+      end
+
+      genesisdata = DataReaders.peek(strat.options.datareaders[order.assetid])
+      open = genesisdata[strat.options.opencol]
+      low = genesisdata[strat.options.lowcol]
+      high = genesisdata[strat.options.highcol]
+      if isa(order, MarketOrder)
+        mid = (low+high)/2
+        deltacash = -order.size*mid
+        if strat.portfolio.buyingpower + deltacash < 0
+          throw(string("Tried to place order $order at price $mid, but there is only $(strat.portfolio.buyingpower) of buying power."))
+        end
+        push!(strat.events, OrderFillEvent(
+          strat.curtime + strat.options.messagelatency, # fills as soon as it gets to the exchange
+          order,
+          deltacash,
+          order.size
+        ))
+        return true
+      elseif isa(order, Orders.LimitOrder)
+        executionprice = 0
+        limitbuyfills = order.size > 0 && order.extremum >= low
+        limitsellfills = order.size < 0 && order.extremum <= high
+        if limitbuyfills
+          executionprice = min(open, order.extremum)
+        elseif limitsellfills
+          executionprice = max(open, order.extremum)
+        end
+
+        if limitbuyfills || limitsellfills
+          deltacash = -order.size*executionprice
+          if strat.portfolio.buyingpower + deltacash < 0
+            throw(string("Tried to place order $order at price $mid, but there is only $(strat.portfolio.buyingpower) of buying power."))
+          end
+          # say it executes at a random time within the bar
+          executiontime = randomtimeininterval(strat.curtime+strat.options.messagelatency, curbarendtime(strat)+strat.options.messagelatency) #
+          push!(strat.events, OrderFillEvent(
+            executiontime,
+            order,
+            deltacash,
+            order.size
+          ))
+          return true
+        else
+          return false
+        end
+      else
+        throw(string("Cannot recognize order of type, `$(typeof(order))`."))
+        return false
+      end
+    end
+
+    function tryfillorders!(strat::Strategy)
+      """Function invoked at the beginning of a bar to fill orders on assets
+      that will fill during the bar."""
+      numorderstocheck = length(strat.openorderids)
+      numorderschecked = 0
+      while numorderschecked < numorderstocheck
+        toporderid = popfirst!(strat.openorderids)
+        orderfilled = tryfillorder(strat, strat.orders[toporderid])
+        if !orderfilled
+          push!(strat.openorderids, toporderid)
+        end
+        numorderschecked += 1
+      end
+    end
+
+    function updateportfolio!(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
+      """Modify the portfolio to reflect an order event. This is handled
+      automatically, so users do not need to update the portfolio
+      within their own `onorderevent` functions.
+      """
+      # Check if the portfolio actually needs to be updated
+      if isa(event, OrderFillEvent)
+        assetid = event.order.assetid
+        # Update the equity values
+        if !haskey(strat.portfolio.equity, assetid)
+          strat.portfolio.equity[assetid] = 0
+        end
+        strat.portfolio.equity[assetid] += event.deltaequity
+
+        # Update the cash values
+        strat.portfolio.buyingpower += event.deltacash
+
+        # Update the value of the portfolio
+        # WARNING: uses `data`, so `data` must be above in the current file
+        assetprices = data(strat, strat.options.closecol) # get the most recent value for the close of the bar; this isn't a perfect estimator of current value, since there's some lag
+        equityvalue = 0
+        for assetid in keys(strat.portfolio.equity)
+          equityvalue += strat.portfolio.equity[assetid] * assetprices[assetid]
+        end
+        strat.portfolio.value = strat.portfolio.buyingpower + equityvalue
+      end
+    end
+
   end
 
-  curbarendtime(strat::Strategy) = strat.curbarstarttime + strat.options.tradinginterval
+  # TODO: replace with an arg in `StrategyOptions`
+  function onend(strat::Strategy)
+    # for ago in length(strat.lattice.recentbars)-1:-1:0
+    for ago in 1:-1:0
+      println(data(strat, ago))
+    end
 
-  function randomtimeininterval(left::LT, right::RT) where {LT<:TimeType, RT<:TimeType}
-    leftms = datetime2epochms(left)
-    rightms = datetime2epochms(right)
-    randms = rand(leftms:rightms)
-    return epochms2datetime(randms)
+    message = string(
+      "Completed running backtest after ", strat.curbarindex, " bars. ",
+      "The final portfolio value is ", strat.portfolio.value, ", with buyingpower=",
+      strat.portfolio.buyingpower, ", and the following holdings: ", strat.portfolio.equity, "."
+    )
+
+    log(strat, message, NOVERBOSITY)
   end
 
-  ## Methods related to orders ##
+  ## Main interface functions ##
+
+  using .Internals
+
+  ### Main Function ###
+  function StrategyOptions(;
+                          datareaders::Dict{AssetId, DR}, # data source for each asset
+                          fieldoperations::Vector{FO},    # field operations to be performed
+                          start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
+                          endtime::ET,                    # end time for the backtest
+                          numlookbackbars::Integer=-1,    # number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
+                          tradinginterval::TTI=Minute(390), # how much time there is between the start of a bar
+                          verbosity::Type=NOVERBOSITY,     # how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
+                          datadelay::DDT=Millisecond(100), # how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
+                          messagelatency::ODT=Millisecond(100), # how much time it takes to transmit a message to a brokerage/exchange
+                          fieldoptimeout::FOTOT=Millisecond(100), # how much time until the field operation computatio times out; note that field operations are computed before the user receives data
+                          datetimecol::String="datetime", # name of datetime column
+                          opencol::String="open",         # name of open column
+                          highcol::String="high",         # name of high column
+                          lowcol::String="low",           # name of low column
+                          closecol::String="close",       # name of close column
+                          volumecol::String="volume",     # name of volume column
+                          ondataevent::Function=Internals.default_ondataevent, # user-defined function that performs logic when data is received
+                          onorderevent::Function=Internals.default_onorderevent, # user-defined function that performs logic when an order event is received
+                          principal::PT=100_000           # starting amount of buying power; in many cases this will be interpreted as a starting cash value
+                          ) where { DR<:AbstractDataReader, FO<:AbstractFieldOperation,
+                          ST<:TimeType, ET<:TimeType, TTI<:TimePeriod,
+                          DDT<:Period, ODT<:Period, FOTOT<:Period, PT<:Number }
+    return StrategyOptions(datareaders, fieldoperations, numlookbackbars,
+      start, endtime, tradinginterval, verbosity, datadelay, messagelatency, fieldoptimeout,
+      datetimecol, opencol, highcol, lowcol, closecol, volumecol,  ondataevent,
+      onorderevent, principal
+    )
+  end
+
+  function run(stratoptions::StrategyOptions)::Strategy
+    # Build the strategy
+    strat = Strategy(stratoptions)
+
+    # Run the strategy
+    while Internals.curbarendtime(strat) < strat.options.endtime
+      genesisfielddata = Internals.loadgenesisdata!(strat)
+      Internals.runnextbar!(strat, genesisfielddata)
+    end
+    onend(strat)
+    # Finish the backtest
+    return strat
+  end
+
   function order!(strat::Strategy, order::OT)::OrderId where {OT<:Orders.AbstractOrder}
     """Place an order, and return the order id!
     Under the hood, there's a lot of machinery happening here. In our current workflow,
@@ -1012,234 +1241,12 @@ module Backtest
 
     # See if the order would be filled during this bar.
     # If not, then store it as an open order.
-    fillsthisbar = tryfillorder!(strat, order)
+    fillsthisbar = Internals.tryfillorder!(strat, order)
     if !fillsthisbar
       push!(strat.openorderids, orderid)
     end
 
     return orderid
-  end
-
-  function tryfillorder!(strat::Strategy, order::OT)::Bool where {OT<:Orders.AbstractOrder}
-    """NOTE: ASSUMES THAT WE ARE TRYING TO FILL THE ORDER AT THE BEGINNING OF A BAR!"""
-
-    if order.size == 0
-      throw("Cannot process an order with `size`=0.")
-    end
-
-    genesisdata = DataReaders.peek(strat.options.datareaders[order.assetid])
-    open = genesisdata[strat.options.opencol]
-    low = genesisdata[strat.options.lowcol]
-    high = genesisdata[strat.options.highcol]
-    if isa(order, Orders.MarketOrder)
-      mid = (low+high)/2
-      deltacash = -order.size*mid
-      if strat.portfolio.buyingpower + deltacash < 0
-        throw(string("Tried to place order ", order, " at price ", mid, " but there is only ", strat.portfolio.buyingpower, " of cash."))
-      end
-      push!(strat.events, OrderFillEvent(
-        strat.curtime + strat.options.messagelatency, # fills as soon as it gets to the exchange
-        order,
-        deltacash,
-        order.size
-      ))
-      return true
-    elseif isa(order, Orders.LimitOrder)
-      executionprice = 0
-      limitbuyfills = order.size > 0 && order.extremum >= low
-      limitsellfills = order.size < 0 && order.extremum <= high
-      if limitbuyfills
-        executionprice = min(open, order.extremum)
-      elseif limitsellfills
-        executionprice = max(open, order.extremum)
-      end
-
-      if limitbuyfills || limitsellfills
-        deltacash = -order.size*executionprice
-        if strat.portfolio.buyingpower + deltacash < 0
-          throw(string("Tried to place order ", order, " at price ", mid, " but there is only ", strat.portfolio.buyingpower, " of cash."))
-        end
-        # say it executes at a random time within the bar
-        executiontime = randomtimeininterval(strat.curtime+strat.options.messagelatency, curbarendtime(strat)+strat.options.messagelatency) #
-        push!(strat.events, OrderFillEvent(
-          executiontime,
-          order,
-          deltacash,
-          order.size
-        ))
-        return true
-      else
-        return false
-      end
-    else
-      throw(string("Cannot recognize order of type, `", typeof(order), "`."))
-      return false
-    end
-  end
-
-  function tryfillorders!(strat::Strategy)
-    """Function invoked at the beginning of a bar to fill orders on assets
-    that will fill during the bar."""
-    numorderstocheck = length(strat.openorderids)
-    numorderschecked = 0
-    while numorderschecked < numorderstocheck
-      toporderid = popfirst!(strat.openorderids)
-      orderfilled = tryfillorder(strat, strat.orders[toporderid])
-      if !orderfilled
-        push!(strat.openorderids, toporderid)
-      end
-      numorderschecked += 1
-    end
-  end
-
-  function updateportfolio!(strat::Strategy, event::ET) where {ET<:AbstractOrderEvent}
-    """Modify the portfolio to reflect an order event. This is handled
-    automatically, so users do not need to update the portfolio
-    within their own `onorderevent` functions.
-    """
-    # Check if the portfolio actually needs to be updated
-    if isa(event, OrderFillEvent)
-      assetid = event.order.assetid
-      # Update the equity values
-      if !haskey(strat.portfolio.equity, assetid)
-        strat.portfolio.equity[assetid] = 0
-      end
-      strat.portfolio.equity[assetid] += event.deltaequity
-
-      # Update the cash values
-      strat.portfolio.buyingpower += event.deltacash
-
-      # Update the value of the portfolio
-      assetprices = data(strat, strat.options.closecol) # get the most recent value for the close of the bar; this isn't a perfect estimator of current value, since there's some lag
-      equityvalue = 0
-      for assetid in keys(strat.portfolio.equity)
-        equityvalue += strat.portfolio.equity[assetid] * assetprices[assetid]
-      end
-      strat.portfolio.value = strat.portfolio.buyingpower + equityvalue
-    end
-  end
-
-  ## Methods related to event handling ##
-  function onnewbarevent!(strat::Strategy, event::NewBarEvent)
-    realstart = now()
-    newbar!(strat.lattice, event.genesisdata) # run a bar on the CalcLattice
-    realend = now()
-
-    computationtime = realend - realstart
-    if computationtime > strat.options.fieldoptimeout
-      throw(string("Field operation computations (i.e. computations on pre-defined",
-      " fields) took more than the allowed time; consider increasing `fieldoptimeout`",
-      " from its current value of $(strat.options.fieldoptimeout)."))
-    end
-
-    push!(strat.events, FieldCompletedProcessingEvent(strat.curtime+computationtime))
-  end
-
-  function processevent!(strat::Strategy, event::T) where {T<:AbstractEvent}
-    """Delegate particular events to their relevant event handlers."""
-    strat.curtime = event.time
-    log(strat, "Processing `$(typeof(event))` event.", INFO)
-
-    if isa(event, NewBarEvent)
-      onnewbarevent!(strat, event)
-    elseif isa(event, FieldCompletedProcessingEvent)
-      strat.options.ondataevent!(strat, event)
-    elseif isa(event, AbstractOrderEvent)
-      log(strat, "Order Event: $event.", TRANSACTIONS)
-      updateportfolio!(strat, event) # update the portfolio as soon as we see an order event
-      strat.options.onorderevent!(strat, event)
-    end
-  end
-
-  ## Highest level non-interface methods ##
-  function runnextbar!(strat::Strategy, genesisfielddata::Dict{AssetId, Dict{FieldId, T}}) where {T<:Any}
-    # 1. Account for it being a new bar
-    # 2. Push a new data event
-    # 3. Execute events until either there's no more time in the bar OR there
-    #    are no more events to run.
-
-    # Account for new bar
-    strat.curbarindex += 1
-    strat.curbarstarttime = DateTime(genesisfielddata[strat.assetids[1]][strat.options.datetimecol])
-    strat.curtime = strat.curbarstarttime
-
-    # Fill all of the orders for the last bar; NOTE: this works due to a weird
-    # loophole from the state of the program. `runnextbar` is only invoked from
-    # inside `run`. Before calling `runnextbar!`, `run` will call `loadgenesisdata!`,
-    # which moves the datareaders forward a bar. This means that the current
-    # `peeking` bar is in fact the bar we are on. For example, if we peek into
-    # a minute-level datareader at 11:33 AM, we will see the bar data for
-    # 11:33-11:34 AM. Thus, we can call `tryfillorders!` at this point.
-    tryfillorders!(strat)
-
-    # Push the data to the queue
-    push!(strat.events, NewBarEvent(
-      strat.curtime + strat.options.datadelay,
-      genesisfielddata
-    ))
-
-    while !empty(strat.events) && peek(strat.events).time < curbarendtime(strat)
-      event = pop!(strat.events)
-      processevent!(strat, event)
-    end
-    log(strat, string("Finished running bar #", strat.curbarindex, "."), INFO)
-  end
-
-  function peekgenesisdata(strat::Strategy)
-    genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
-    for assetid in assetids
-      genesisfielddata[assetid] = DataReaders.peek(strat.options.datareaders[assetid])
-    end
-    return genesisfielddata
-  end
-
-  function loadgenesisdata!(strat::Strategy)::Dict{AssetId, Dict{FieldId, Any}}
-    # Initialize genesis field data array
-    uniquedatetimes = Set([])
-    genesisfielddata = Dict{AssetId, Dict{FieldId, Any}}()
-    for assetid in strat.assetids
-      genesisassetfielddata = popfirst!(strat.options.datareaders[assetid])
-      datetime = genesisassetfielddata[strat.options.datetimecol]
-      union!(uniquedatetimes, [datetime])
-      if length(uniquedatetimes) != 1
-        log(strat, "Error occurred. :(", DEBUG)
-        throw("Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time.")
-      else
-        genesisfielddata[assetid] = genesisassetfielddata
-      end
-    end
-    return genesisfielddata
-  end
-
-  function onend(strat::Strategy)
-    # for ago in length(strat.lattice.recentbars)-1:-1:0
-    for ago in 1:-1:0
-      println(data(strat, ago))
-    end
-
-    message = string(
-      "Completed running backtest after ", strat.curbarindex, " bars. ",
-      "The final portfolio value is ", strat.portfolio.value, ", with buyingpower=",
-      strat.portfolio.buyingpower, ", and the following holdings: ", strat.portfolio.equity, "."
-    )
-
-    log(strat, message, NOVERBOSITY)
-  end
-
-  ## Main interface functions ##
-  ### Main Function ###
-  function run(stratoptions::StrategyOptions)::Strategy
-    # Build the strategy
-    strat = Strategy(stratoptions)
-
-    # Run the strategy
-    while curbarendtime(strat) < strat.options.endtime
-      genesisfielddata = loadgenesisdata!(strat)
-      runnextbar!(strat, genesisfielddata)
-    end
-    onend(strat)
-    # Finish the backtest
-    return strat
   end
 
   module Utils
@@ -1300,7 +1307,6 @@ module Backtest
 
       # DataReader copy to be used later
       adatareaderkey = pop!(Set(keys(datareaders)))
-      println(typeof(datareaders[adatareaderkey]))
       adatareader = DataReaders.copy(datareaders[adatareaderkey])
 
       # Run the empty backtest with all bars stored, no verbosity, no latency, and no principal
@@ -1323,30 +1329,24 @@ module Backtest
         principal=0
       )
       completedstrat = run(stratoptions)
-
-      # # Create a massive JSON object
-      # fastforward!(adatareader, start)
-
-      ## Iterate over each date (a do-while loop)
       allstratdata = getalldata(completedstrat)
 
+
+      fastforward!(adatareader, start)
+
+      ## Iterate over each date (a do-while loop)
       alljsondata = OrderedDict{DateTime, Dict{AssetId, Dict{FieldId, Any}}}()
       curbarindex = 1
       for curbarindex in 1:length(allstratdata)
         dt = popfirst!(adatareader)[datetimecol]
-        # println(endtime)
         if dt >= endtime
           break
         else
           thisbardata = allstratdata[curbarindex]
-          # println(thisbardata)
-          # println("\n\n")
           alljsondata[dt] = Dict{AssetId, Dict{FieldId, Any}}()
           for assetid in names(thisbardata, 1)
-            # println(assetid)
             alljsondata[dt][assetid] = Dict{FieldId, Any}()
             for fieldid in names(thisbardata, 2)
-              # println(fieldid)
               alljsondata[dt][assetid][fieldid] = thisbardata[assetid, fieldid]
             end
           end
@@ -1363,7 +1363,6 @@ module Backtest
       return
     end
   end # module
-
 
   export run, data, numbarsavailable
 end
