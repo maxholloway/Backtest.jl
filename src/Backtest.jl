@@ -788,13 +788,29 @@ module Backtest
   import .DataReaders # required in order to resolve `peek` collision
 
   ## Type Declarations ##
+  """Top of the verbosity type hierarchy. In practice, this is not intended to be a
+  user-facing type, however it can be used if a user wants to log every possible
+  message in the backtest."""
   abstract type AbstractVerbosity end
+
+  """Log all messages at the INFO level or below. This is a lot of verbosity.
+  Supertype: `AbstractVerbosity`"""
   abstract type INFO <: AbstractVerbosity end
+
+  """Log all messages related to transactions, and all messages at a lower level.
+  Supertype: `INFO`"""
   abstract type TRANSACTIONS <: INFO end
-  abstract type DEBUG <: TRANSACTIONS end
-  abstract type WARNING <: DEBUG end
+
+  """Log all messages that give warnings or important information. This is very low verbosity.
+  Supertype: `TRANSACTIONS`"""
+  abstract type WARNING <: TRANSACTIONS end
+
+  """Log no messages at all.
+  Supertype: `WARNING`"""
   abstract type NOVERBOSITY <: WARNING end
 
+  """Options for running a backtest.
+  """
   struct StrategyOptions
     datareaders::Dict{AssetId, DR} where {DR<:AbstractDataReader}
     fieldoperations::Vector{FO} where {FO<:AbstractFieldOperation}
@@ -817,6 +833,7 @@ module Backtest
     principal::PT where {PT<:Number}
   end
 
+  """Information about the portfolio."""
   mutable struct Portfolio
     equity::Dict{AssetId, EN} where {EN<:Number} # amount of equity in each asset
     buyingpower::CN where {CN<:Number}
@@ -824,6 +841,9 @@ module Backtest
     Portfolio(buyingpower::N) where {N<:Number} = new(Dict{AssetId, Number}(), buyingpower, buyingpower)
   end
 
+  """Container for all backtest run-time state. `Strategy`
+  objects should __not__ be modified within user-provided
+  functions."""
   mutable struct Strategy
     options::StrategyOptions
     events::EventQueue
@@ -839,52 +859,141 @@ module Backtest
   end
 
   ## Interface Functions (pt. 1) ##
+  """
+      getalldata(strat::Strategy)::Vector{NamedArray}
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+
+  # Returns
+  - `Vector{NamedArray}`: Vector of [assetid, fieldid]->value pairs for all of the stored bars.
+
+  # Note
+  This function retrieves all of the available bars of data, so t is unwise to call it
+    unless necessary. For example, if one just wants the past 5 bars, do not call
+    `getalldata`, but instead call [data(strat, ago) for ago = 0:4].
+  """
   function getalldata(strat::Strategy)::Vector{NamedArray}
     Engine.getalldata(strat.lattice)
   end
 
+  """
+      data(strat::Strategy, ago::Integer)::NamedArray
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+  - `ago::Integer`: the number of bars before the previous bar; if `ago` = 0, this accesses
+      the previous bar's data
+
+  # Returns
+  - `NamedArray`: [assetid, fieldid]->value pairs for `ago` bars ago.
+  """
   function data(strat::Strategy, ago::Integer)::NamedArray
-    """Gets (assetid, fieldid)->value pairs for `ago` bars ago; if `ago=0`,
-    this gets the previous bar's data."""
     return data(strat.lattice, ago)
   end
 
+  """
+      data(strat::Strategy, ago::Integer, fieldid::FieldId)::NamedArray
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+  - `ago::Integer`: the number of bars before the previous bar; if `ago` = 0, this accesses
+      the previous bar's data
+  - `fieldid::FieldId`: Note: `FieldId` is an alias for `String`
+
+  # Returns
+  - `NamedArray`: [fieldid]->value pairs for `ago` bars ago.
+  """
   function data(strat::Strategy, ago::Integer, fieldid::FieldId)::NamedArray
-    """Gets (assetid)->value pairs for `ago` bars ago for a particular field;
-    if ago=0, then this is equivalent to data(strat, fieldid)."""
     return data(strat.lattice, ago, fieldid)
   end
 
+  """
+      data(strat::Strategy, ago::Integer, assetid::AssetId, fieldid::FieldId)
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+  - `ago::Integer`: the number of bars before the previous bar; if `ago` = 0, this accesses
+      the previous bar's data
+  - `assetid::AssetId`: Note: `AssetId` is an alias for `String`
+  - `fieldid::FieldId`: Note: `FieldId` is an alias for `String`
+
+  # Returns
+  - `{<:Any}`: Object associated `ago` bars ago with this `assetid` and `fieldid`
+  """
   function data(strat::Strategy, ago::Integer, assetid::AssetId, fieldid::FieldId)
-    """Gets the value for a particular field for a particular asset on a particular bar; if
-    ago=0, then this is equivalent to data(strat, assetid, fieldid)."""
     return data(strat.lattice, ago, assetid, fieldid)
   end
 
+  """
+      data(strat::Strategy)::NamedArray
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+
+  # Returns
+  - `NamedArray`: [assetid, fieldid]->value pairs for the previous bar
+  """
   function data(strat::Strategy)::NamedArray
-    """Gets (assetid, fieldid)->value pairs for the previous bar.
-    For example, if the time between bars is 1 minute, and the current time
-    is 11:33:25 (HH:MM:SS), then this would give OHLCV data from
-    11:32:00-11:32:59.999... . WE CANNOT ACCESS DATA FOR THE CURRENT BAR,
-    SINCE IT IS NOT COMPLETED YET (e.g. cannot access this bar's open price)."""
     return data(strat.lattice)
   end
 
+  """
+      data(strat::Strategy, fieldid::FieldId)::NamedArray
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+  - `fieldid::FieldId`: Note: `FieldId` is an alias for `String`
+
+  # Returns:
+  - `NamedArray`: assetid->value pairs for the previous bar.
+  """
   function data(strat::Strategy, fieldid::FieldId)::NamedArray
-    """Gets assetid->value pairs for the previous bar."""
     return data(strat.lattice, fieldid)
   end
 
+  """
+      data(strat::Strategy, assetid::AssetId, fieldid::FieldId)
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running when this method is invoked
+  - `assetid::AssetId`: Note: `AssetId` is an alias for `String`
+  - `fieldid::FieldId`: Note: `FieldId` is an alias for `String`
+
+
+  # Returns
+  - `{<:Any}`: The object associated with `assetid` and `fieldid` for the previous bar.
+
+  """
   function data(strat::Strategy, assetid::AssetId, fieldid::FieldId)
-    """Gets value for a particular field for a particular asset on the previous bar."""
     return data(strat.lattice, assetid, fieldid)
   end
 
-  function numbarsavailable(strat::Strategy)
+
+  """
+      numbarsavailable(strat::Strategy)::Integer
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running that invokes this method
+
+  # Returns
+  - `Integer`: the number of bars available from which we can retrieve data.
+  """
+  function numbarsavailable(strat::Strategy)::Integer
     return numbarsavailable(strat.lattice)
   end
 
   ### Etc. Function(s) ###
+  """
+      log(strat::Strategy, message::String, verbosity::Type)
+
+  Write `message` to the console.
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running that invokes this method
+  - `message::String`: message to be written to console
+  - `verbosity::Type`: the verbosity level to be used; see `Verbosity Levels`
+  """
   function log(strat::Strategy, message::String, verbosity::Type)
     if verbosity <: strat.options.verbosity
       time = format(strat.curtime, "yyyy-mm-dd HH:MM:SS.sss")
@@ -996,7 +1105,7 @@ module Backtest
         union!(uniquedatetimes, [datetime])
         if length(uniquedatetimes) != 1
           errormessage = "Not all datetimes are unique; consider investigating the data sources. Bear in mind that all data sources must have the same bar start times after the given backtest start time."
-          Backtest.log(strat, "Error occurred: $message", DEBUG)
+          Backtest.log(strat, "Error occurred: $message", WARNING)
           throw(message)
         else
           genesisfielddata[assetid] = genesisassetfielddata
@@ -1169,9 +1278,38 @@ module Backtest
   using .Internals
 
   ### Main Function ###
+  """
+      StrategyOptions(; kwargs...)::StrategyOptions
+
+  # Keyword Arguments
+
+  ## Required
+  - datareaders::Dict{AssetId, <:AbstractDataReader}: data source for each asset
+  - fieldoperations::Vector{<:AbstractFieldOperation}: field operations to be performed
+  - start::{<:Dates.TimeType}: start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
+  - endtime::{<:Dates.TimeType}: end time for the backtest
+
+  ## Optional
+  - `numlookbackbars::Integer`: number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
+  - `tradinginterval::{<:Dates.TimePeriod}`: how much time there is between the start of a bar
+  - `verbosity:Type`: how much verbosity the backtest should have; INFO gives the most messages, and NOVERBOSITY gives the fewest
+  - `datadelay::{<:Dates.Period}`: how much time transpires at the beginning of a bar before data is received; e.g. if this is 5 seconds, then data will be `received` by the backtest 5 seconds after the bar starts.
+  - `messagelatency::{<:Dates.Period}`: how much time it takes to transmit a message to a brokerage/exchange
+  - `fieldoptimeout::{<:Dates.Period}`: how much time until the field operation computatio times out; note that field operations are computed before the user receives data
+  - `datetimecol::String`: name of datetime column
+  - `opencol::String`: name of open column
+  - `highcol::String`: name of high column
+  - `lowcol::String`: name of low column
+  - `closecol::String`: name of close column
+  - `volumecol::String`: name of volume column
+  - `ondataevent::Function`: user-defined function that performs logic when data is received
+  - `onorderevent::Function`: user-defined function that performs logic when an order event is received
+  - `principal::{<:Dates.Period}`: starting amount of buying power; in many cases this will be interpreted as a starting cash value
+
+  """
   function StrategyOptions(;
-                          datareaders::Dict{AssetId, DR}, # data source for each asset
-                          fieldoperations::Vector{FO},    # field operations to be performed
+                          datareaders::Dict{AssetId, DR},
+                          fieldoperations::Vector{FO},
                           start::ST,                      # start time for the backtest (this is the DateTime of the first bar of data to be read; actions start one bar later)
                           endtime::ET,                    # end time for the backtest
                           numlookbackbars::Integer=-1,    # number of backtest bars to store; if -1, then all data is stored; if space is an issue, this can be changed to a positive #. However, this will limit how much data can be accessed.
@@ -1199,6 +1337,19 @@ module Backtest
     )
   end
 
+
+  """
+      run(stratoptions::StrategyOptions)::Strategy
+
+  Run a backtest and obtain the completed strategy object.
+
+  # Arguments
+  - `stratoptions::StrategyOptions`: all of the options to be used for the backtest
+
+  # Returns
+  - `Strategy`: a completed `Strategy` object
+
+  """
   function run(stratoptions::StrategyOptions)::Strategy
     # Build the strategy
     strat = Strategy(stratoptions)
@@ -1208,14 +1359,29 @@ module Backtest
       genesisfielddata = Internals.loadgenesisdata!(strat)
       Internals.runnextbar!(strat, genesisfielddata)
     end
-    onend(strat)
+
     # Finish the backtest
+    onend(strat)
+
     return strat
   end
 
+  """
+      order!(strat::Strategy, order::OT)::OrderId where {OT<:Orders.AbstractOrder}
+
+  Place an order and obtain its `orderid`.
+
+  # Arguments
+  - `strat::Strategy`: the strategy object running that invokes this method
+  - `order::{<:Orders.AbstractOrder}`:
+
+
+  # Returns
+  - `OrderId`: identifier for the placed order.
+
+  """
   function order!(strat::Strategy, order::OT)::OrderId where {OT<:Orders.AbstractOrder}
-    """Place an order, and return the order id!
-    Under the hood, there's a lot of machinery happening here. In our current workflow,
+    """Under the hood, there's a lot of machinery happening here! In our current workflow,
     we only check to fill orders once per bar. This is a limitation of our backtest's
     interface, and surely one would have a streaming API to receive notifications from their
     brokerage in real life. However, since our backtest is fundamentally synchronous, we
@@ -1363,4 +1529,4 @@ module Backtest
   end # module
 
   export StrategyOptions, run, order!, getalldata, data, numbarsavailable, log
-end
+end # module
