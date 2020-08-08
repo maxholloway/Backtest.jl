@@ -1,5 +1,6 @@
 # Backtest.jl
 ![CI](https://github.com/maxholloway/backtest/workflows/CI/badge.svg?branch=master)
+[![](https://img.shields.io/badge/docs-dev-blue.svg)](https://maxholloway.github.io/Backtest.jl/dev/)
 
 A very simple event-based backtesting platform.
 
