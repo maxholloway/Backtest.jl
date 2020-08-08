@@ -61,4 +61,3 @@ The following are types that users should never have to access directly.
 ```@docs
 Strategy
 ```
-Feel free to reach out if you have any questions!
