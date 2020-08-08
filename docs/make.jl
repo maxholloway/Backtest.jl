@@ -6,5 +6,5 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/maxholloway/backtest.git",
+    repo = "github.com/maxholloway/Backtest.jl.git",
 )
