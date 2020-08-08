@@ -10,3 +10,4 @@ docs/build/
 # Environment tracking
 *__pycache__*
 .ipynb_checkpoints*
+venv

@@ -33,4 +33,9 @@ git clone "https://github.com/maxholloway/Backtest.jl/""
 Currently this repository is only tested on Julia `1.0`, `1.4`, and the Julia `nightly` build in the CI/CD pipeline. If tests fail on your machine, please report this in the [issues](https://github.com/maxholloway/Backtest.jl/issues) section.
 
 ### Getting Started
-To get started, it's recommended that you walkthrough this Jupyter notebook.
+To get started, it's recommended that you walkthrough the GettingStarted jupyter notebook (located in the `examples/` folder). This provides a thorough explanation of the framework interface.
+
+### Development Guidelines
+This project is in its infancy! Contact me by email if you are interested in contributing, and we can sync to discuss. 
+
+Email: maxwellpearmanholloway@gmail.com
