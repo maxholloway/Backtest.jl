@@ -37,6 +37,7 @@ Currently this repository is only tested on Julia `1.0`, `1.4`, and the Julia `n
 To get started, it's recommended that you walkthrough the GettingStarted jupyter notebook (located in the `examples/` folder). This provides a thorough explanation of the framework interface.
 
 ### Development Guidelines
-This project is in its infancy! Contact me by email if you are interested in contributing, and we can sync to discuss. 
+This project is in its infancy! Contact me if you'd like to contribute. :)
 
+## Questions? Contact me!
 Email: maxwellpearmanholloway@gmail.com
