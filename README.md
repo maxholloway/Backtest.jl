@@ -3,7 +3,7 @@
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](https://maxholloway.github.io/Backtest.jl/dev/)
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://maxholloway.github.io/Backtest.jl/dev/)
 
-A very simple event-based backtesting platform.
+A simple, fast event-based backtesting platform.
 
 ## Background
 The aim of this project is to have a straightforward strategy for testing equity trading strategies on historical data. Specifically, we aim to satisfy the following properties here:
